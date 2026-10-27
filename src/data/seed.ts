@@ -1,4 +1,5 @@
 import { DEFAULT_BELL } from '../lib/timetable'
+import { SEEDED_CREDENTIALS } from './auth'
 import { CAMBRIDGE_CATALOGUE, catalogueId } from './catalogue'
 import type {
   BellSchedule,
@@ -145,16 +146,22 @@ const subjectsOf = (year: number) => YEAR_PLAN.find((entry) => entry.year === ye
  * Every teacher is read-only until the registrar grants a permission. Grace is
  * the one seeded account that may enter marks, so the demo sign-in shows both
  * ends of the model: she writes inside the window, the others read.
+ *
+ * Seeded staff carry the demo password so the documented logins keep working.
+ * Joseph is the exception, and deliberately so: he stands for a teacher the
+ * registrar has just recorded, and he has no credential because choosing one is
+ * the teacher's own step. He appears on the register as awaiting sign-up until
+ * someone completes the sign-up flow with his address.
  */
 const teachers: Teacher[] = [
-  { _id: 't-1', school_id: SCHOOL_ID, full_name: 'Grace Wanjiru', email: 'g.wanjiru@iupc.academy', employee_id: 'EMP-011', assigned_subject_ids: ['sub-mat', 'sub-as-mat', 'sub-ls-mat'], permissions: ['marks.enter'], initials: 'GW' },
-  { _id: 't-2', school_id: SCHOOL_ID, full_name: 'Peter Otieno', email: 'p.otieno@iupc.academy', employee_id: 'EMP-014', assigned_subject_ids: ['sub-eng', 'sub-ls-eng', 'sub-ls-glp'], permissions: [], initials: 'PO' },
-  { _id: 't-3', school_id: SCHOOL_ID, full_name: 'Mary Achieng', email: 'm.achieng@iupc.academy', employee_id: 'EMP-019', assigned_subject_ids: ['sub-bio', 'sub-che', 'sub-as-bio', 'sub-as-che'], permissions: [], initials: 'MA' },
-  { _id: 't-4', school_id: SCHOOL_ID, full_name: 'Samuel Kiptoo', email: 's.kiptoo@iupc.academy', employee_id: 'EMP-023', assigned_subject_ids: ['sub-his', 'sub-ls-hum', 'sub-as-psy'], permissions: [], initials: 'SK' },
-  { _id: 't-5', school_id: SCHOOL_ID, full_name: 'Esther Njeri', email: 'e.njeri@iupc.academy', employee_id: 'EMP-031', assigned_subject_ids: ['sub-cst', 'sub-ls-cmp', 'sub-as-cst'], permissions: [], initials: 'EN' },
-  { _id: 't-6', school_id: SCHOOL_ID, full_name: 'Daniel Mwangi', email: 'd.mwangi@iupc.academy', employee_id: 'EMP-036', assigned_subject_ids: ['sub-phy', 'sub-ls-sci', 'sub-as-phy'], permissions: [], initials: 'DM' },
-  { _id: 't-7', school_id: SCHOOL_ID, full_name: 'Faith Wambui', email: 'f.wambui@iupc.academy', employee_id: 'EMP-041', assigned_subject_ids: ['sub-ls-art', 'sub-ls-pe'], permissions: [], initials: 'FW' },
-  { _id: 't-8', school_id: SCHOOL_ID, full_name: 'Joseph Odhiambo', email: 'j.odhiambo@iupc.academy', employee_id: 'EMP-047', assigned_subject_ids: ['sub-bst', 'sub-as-eco'], permissions: [], initials: 'JO' },
+  { _id: 't-1', school_id: SCHOOL_ID, full_name: 'Grace Wanjiru', email: 'g.wanjiru@iupc.academy', employee_id: 'EMP-011', assigned_subject_ids: ['sub-mat', 'sub-as-mat', 'sub-ls-mat'], permissions: ['marks.enter'], initials: 'GW', ...SEEDED_CREDENTIALS },
+  { _id: 't-2', school_id: SCHOOL_ID, full_name: 'Peter Otieno', email: 'p.otieno@iupc.academy', employee_id: 'EMP-014', assigned_subject_ids: ['sub-eng', 'sub-ls-eng', 'sub-ls-glp'], permissions: [], initials: 'PO', ...SEEDED_CREDENTIALS },
+  { _id: 't-3', school_id: SCHOOL_ID, full_name: 'Mary Achieng', email: 'm.achieng@iupc.academy', employee_id: 'EMP-019', assigned_subject_ids: ['sub-bio', 'sub-che', 'sub-as-bio', 'sub-as-che'], permissions: [], initials: 'MA', ...SEEDED_CREDENTIALS },
+  { _id: 't-4', school_id: SCHOOL_ID, full_name: 'Samuel Kiptoo', email: 's.kiptoo@iupc.academy', employee_id: 'EMP-023', assigned_subject_ids: ['sub-his', 'sub-ls-hum', 'sub-as-psy'], permissions: [], initials: 'SK', ...SEEDED_CREDENTIALS },
+  { _id: 't-5', school_id: SCHOOL_ID, full_name: 'Esther Njeri', email: 'e.njeri@iupc.academy', employee_id: 'EMP-031', assigned_subject_ids: ['sub-cst', 'sub-ls-cmp', 'sub-as-cst'], permissions: [], initials: 'EN', ...SEEDED_CREDENTIALS },
+  { _id: 't-6', school_id: SCHOOL_ID, full_name: 'Daniel Mwangi', email: 'd.mwangi@iupc.academy', employee_id: 'EMP-036', assigned_subject_ids: ['sub-phy', 'sub-ls-sci', 'sub-as-phy'], permissions: [], initials: 'DM', ...SEEDED_CREDENTIALS },
+  { _id: 't-7', school_id: SCHOOL_ID, full_name: 'Faith Wambui', email: 'f.wambui@iupc.academy', employee_id: 'EMP-041', assigned_subject_ids: ['sub-ls-art', 'sub-ls-pe'], permissions: [], initials: 'FW', ...SEEDED_CREDENTIALS },
+  { _id: 't-8', school_id: SCHOOL_ID, full_name: 'Joseph Odhiambo', email: 'j.odhiambo@iupc.academy', employee_id: 'EMP-047', assigned_subject_ids: ['sub-bst', 'sub-as-eco'], permissions: [], initials: 'JO', password_salt: null, password_hash: null, activated_at: null },
 ]
 
 const FIRST = ['Amina', 'Brian', 'Cynthia', 'David', 'Esther', 'Felix', 'Grace', 'Hassan', 'Irene', 'James', 'Kelvin', 'Lydia', 'Moses', 'Nancy', 'Oscar', 'Purity', 'Quincy', 'Rachel', 'Samuel', 'Tabitha', 'Umar', 'Violet', 'Wycliffe', 'Yvonne']

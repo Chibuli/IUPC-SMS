@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { KeyRound, PenLine, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { KeyRound, PenLine, RotateCcw, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { api, useDb } from '../data/db'
 import { useSession } from '../session'
 import { Avatar, Badge, EmptyState, Field, Modal, PageHeader, SectionTitle } from '../components/ui'
-import { AccessBadge, PermissionSummary, PermissionToggles } from '../components/permissions'
+import { AccessBadge, AccountBadge, PermissionSummary, PermissionToggles } from '../components/permissions'
 import { grantedPermissions, hasPermission, normalisePermissions } from '../lib/permissions'
 import { offeredSubjects } from '../lib/subjects'
+import { formatDateTime } from '../lib/format'
 import type { Teacher, TeacherPermissionKey } from '../data/types'
 
-type AccessFilter = 'all' | 'entry' | 'readonly'
+type AccessFilter = 'all' | 'entry' | 'readonly' | 'awaiting'
 
 interface TeacherForm {
   full_name: string
@@ -47,6 +48,7 @@ export default function Teachers() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null)
   const [removeFor, setRemoveFor] = useState<string | null>(null)
+  const [resetFor, setResetFor] = useState<string | null>(null)
 
   function openRegister() {
     setForm(blankForm(db.teachers))
@@ -77,6 +79,7 @@ export default function Teachers() {
   }
 
   const entering = db.teachers.filter((teacher) => hasPermission(teacher, 'marks.enter')).length
+  const awaiting = db.teachers.filter((teacher) => !teacher.password_hash).length
 
   const offered = useMemo(() => offeredSubjects(db.subjects), [db.subjects])
 
@@ -101,7 +104,13 @@ export default function Teachers() {
         needle ? `${teacher.full_name} ${teacher.email} ${teacher.employee_id}`.toLowerCase().includes(needle) : true,
       )
       .filter((teacher) =>
-        access === 'all' ? true : access === 'entry' ? hasPermission(teacher, 'marks.enter') : !hasPermission(teacher, 'marks.enter'),
+        access === 'all'
+          ? true
+          : access === 'entry'
+            ? hasPermission(teacher, 'marks.enter')
+            : access === 'readonly'
+              ? !hasPermission(teacher, 'marks.enter')
+              : !teacher.password_hash,
       )
       .sort((a, b) => a.full_name.localeCompare(b.full_name))
   }, [db.teachers, query, access])
@@ -156,10 +165,26 @@ export default function Teachers() {
       await api.teachers.create(payload)
       setNotice({
         tone: 'ok',
-        text: `${name} added to the staff register as a read-only account. Grant mark entry in Settings → Teacher permissions.`,
+        text: `${name} added to the staff register as a read-only account. They create their own password with ${email} on the sign-in page — grant mark entry in Settings → Teacher permissions.`,
       })
     }
     setEditor(null)
+  }
+
+  /**
+   * Clears the stored credential so the account goes back to awaiting sign-up.
+   * The teacher's subjects and permissions are untouched: this only replaces how
+   * they get in, not what they may do once they are in.
+   */
+  async function resetSignIn() {
+    if (!resetFor) return
+    const teacher = db.teachers.find((entry) => entry._id === resetFor)
+    await api.teachers.setPassword(resetFor, null)
+    setResetFor(null)
+    setNotice({
+      tone: 'ok',
+      text: `${teacher?.full_name ?? 'The teacher'} can now create a new password at the sign-in page using ${teacher?.email ?? 'their staff email'}.`,
+    })
   }
 
   async function remove() {
@@ -184,6 +209,7 @@ export default function Teachers() {
             <span>{db.teachers.length} staff</span>
             <span>{entering} may enter marks</span>
             <span>{db.teachers.length - entering} read-only</span>
+            <span data-count="awaiting-signup">{awaiting} awaiting sign-up</span>
           </>
         }
         actions={
@@ -244,6 +270,7 @@ export default function Teachers() {
             <option value="all">All staff</option>
             <option value="entry">May enter marks</option>
             <option value="readonly">Read-only</option>
+            <option value="awaiting">Awaiting sign-up</option>
           </select>
         </label>
       </div>
@@ -283,6 +310,15 @@ export default function Teachers() {
                   <AccessBadge teacher={teacher} />
                 </div>
 
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <AccountBadge teacher={teacher} />
+                  <span className="text-[10.5px] text-ink/45" data-account={teacher.password_hash ? 'active' : 'awaiting'}>
+                    {teacher.password_hash
+                      ? `Chose their password ${teacher.activated_at ? formatDateTime(teacher.activated_at) : ''}`.trim()
+                      : 'Recorded, but has never signed in — they create their own password.'}
+                  </span>
+                </div>
+
                 <div className="mt-3">
                   <p className="micro">Teaches · {subjects.length} subject{subjects.length === 1 ? '' : 's'}</p>
                   <div className="mt-1.5 flex flex-wrap gap-1">
@@ -312,6 +348,17 @@ export default function Teachers() {
                     <button type="button" className="btn btn-sm" data-action="manage-teacher" onClick={() => openEdit(teacher)}>
                       <PenLine size={13} /> Manage
                     </button>
+                    {teacher.password_hash ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        data-action="reset-signin"
+                        title="Clear the stored password so the teacher can choose a new one"
+                        onClick={() => setResetFor(teacher._id)}
+                      >
+                        <RotateCcw size={13} /> Reset sign-in
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="btn btn-danger btn-sm"
@@ -352,6 +399,15 @@ export default function Teachers() {
               Writing is granted, never assumed: an account starts read-only, and mark entry needs the registrar’s
               permission plus an open window. Marks stop being editable when the window closes, and a locked or
               published paper is read-only for everyone.
+            </span>
+          </p>
+          <p className="mt-2 flex items-start gap-2">
+            <KeyRound size={14} className="mt-0.5 shrink-0 text-ink/35" />
+            <span>
+              Sign-in is invitation-only. Recording a teacher here puts their email on the register and nothing more —
+              they choose their own password at the sign-in page with that address, and until they do the account
+              cannot be entered at all. Reset sign-in clears the stored password if one is forgotten, and the teacher
+              chooses a new one the same way.
             </span>
           </p>
         </div>
@@ -395,7 +451,7 @@ export default function Teachers() {
             </Field>
           </div>
 
-          <Field label="Staff email" hint="This is the address they sign in with.">
+          <Field label="Staff email" hint="They create their own password with this address at the sign-in page.">
             <input
               className="input-field"
               data-field="teacher-email"
@@ -477,6 +533,29 @@ export default function Teachers() {
             </p>
           ) : null}
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(resetFor)}
+        title="Reset sign-in"
+        onClose={() => setResetFor(null)}
+        width={440}
+        footer={
+          <>
+            <button type="button" className="btn btn-sm" onClick={() => setResetFor(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" data-action="confirm-reset-signin" onClick={() => void resetSignIn()}>
+              Reset sign-in
+            </button>
+          </>
+        }
+      >
+        <p className="text-[12.5px] text-ink/70">
+          This clears the password stored for {db.teachers.find((teacher) => teacher._id === resetFor)?.full_name ?? 'the teacher'}.
+          Their subjects and permissions are kept. The account returns to awaiting sign-up, and they choose a new password
+          at the sign-in page with their staff email.
+        </p>
       </Modal>
 
       <Modal

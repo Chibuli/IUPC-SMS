@@ -45,6 +45,16 @@ export interface Teacher {
   /** Empty array = read-only account. */
   permissions: TeacherPermissionKey[]
   initials: string
+  /**
+   * The teacher's own sign-in credential, absent until they complete sign-up.
+   * The register alone does not let anyone in: the registrar records the person,
+   * the person chooses the password. `password_hash` is null while the account
+   * is waiting for that first sign-up.
+   */
+  password_salt?: string | null
+  password_hash?: string | null
+  /** When the teacher set their password. Null = awaiting sign-up. */
+  activated_at?: string | null
 }
 
 /**

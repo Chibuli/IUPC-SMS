@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { SCHOOL_ID, seedDatabase } from './seed'
 import { initialsOf } from '../lib/format'
+import { enqueueWrite } from '../lib/offline'
 import { normalisePermissions } from '../lib/permissions'
 import type {
   BellSchedule,
@@ -94,11 +95,21 @@ function load(): Database {
 
   // Staff recorded before permissions existed inherit the seed's grants for the
   // same person and are read-only otherwise — a permission is never implied.
-  const seededPermissions = new Map(base.teachers.map((teacher) => [teacher._id, teacher.permissions]))
-  merged.teachers = merged.teachers.map((teacher) => ({
-    ...teacher,
-    permissions: normalisePermissions(teacher.permissions ?? seededPermissions.get(teacher._id) ?? []),
-  }))
+  // Sign-in credentials are back-filled the same way: a seeded account keeps the
+  // demo password it has always had rather than being locked out by an update.
+  // A staff record the registrar added themselves has no seeded counterpart and
+  // so stays awaiting sign-up, which is exactly what it is.
+  const seededStaff = new Map(base.teachers.map((teacher) => [teacher._id, teacher]))
+  merged.teachers = merged.teachers.map((teacher) => {
+    const seeded = seededStaff.get(teacher._id)
+    return {
+      ...teacher,
+      permissions: normalisePermissions(teacher.permissions ?? seeded?.permissions ?? []),
+      password_salt: teacher.password_salt ?? seeded?.password_salt ?? null,
+      password_hash: teacher.password_hash ?? seeded?.password_hash ?? null,
+      activated_at: teacher.activated_at ?? seeded?.activated_at ?? null,
+    }
+  })
 
   // Subjects stored before the Cambridge catalogue: the seed's rows take over by
   // id — so every paper and lesson picks up the real syllabus code — while
@@ -190,6 +201,37 @@ export const uid = (prefix = 'loc') =>
 
 const now = () => new Date().toISOString()
 
+/**
+ * Offline capture labels. A record that is waiting to leave the device is shown
+ * to a person as the thing they keyed — learner, paper, mark — never as ids.
+ */
+function paperLabel(exam: Exam | undefined): string {
+  if (!exam) return 'Paper'
+  const subject = db.subjects.find((s) => s._id === exam.subject_id)
+  const klass = db.classes.find((c) => c._id === exam.class_id)
+  return [
+    subject ? `${subject.name} ${subject.code}` : 'Subject',
+    klass ? [klass.class_name, klass.stream_name].filter(Boolean).join(' ') : '',
+    exam.exam_type,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function markLabel(examId: string, studentId: string, score: number | 'X' | 'Y' | null): string {
+  const student = db.students.find((s) => s._id === studentId)
+  const exam = db.exams.find((e) => e._id === examId)
+  const shown =
+    score === null
+      ? 'cleared'
+      : score === 'X'
+        ? 'X · missing'
+        : score === 'Y'
+          ? 'Y · irregularity'
+          : `${score}/${exam?.max_score ?? 100}`
+  return `${student?.full_name ?? 'Learner'} · ${paperLabel(exam)} — ${shown}`
+}
+
 /** Raw tree edit. Used by term, subject and grading operations. */
 export function mutate(fn: (draft: Database) => void) {
   const draft: Database = structuredClone(db)
@@ -269,6 +311,7 @@ export const api = {
           result = created
         }
       })
+      enqueueWrite('marks.setScore', markLabel(examId, studentId, score), { examId, studentId, score })
       return result as Mark
     },
     async setRemarks(examId: string, studentId: string, remarks: string) {
@@ -276,6 +319,7 @@ export const api = {
         const existing = draft.marks.find((m) => m.exam_id === examId && m.student_id === studentId)
         if (existing) existing.remarks = remarks
       })
+      enqueueWrite('marks.setRemarks', markLabel(examId, studentId, null), { examId, studentId, remarks })
       return { ok: true as const }
     },
   },
@@ -299,6 +343,9 @@ export const api = {
       mutate((draft) => {
         draft.exams.push(exam)
       })
+      // A paper keyed offline is created from the same first result that creates
+      // it online, so the record and its paper leave the device together.
+      enqueueWrite('exams.ensure', paperLabel(exam), { ...input })
       return exam
     },
     /** The total a paper is marked out of — percentages are read from it. */
@@ -306,6 +353,10 @@ export const api = {
       mutate((draft) => {
         const exam = draft.exams.find((e) => e._id === examId)
         if (exam && maxScore > 0) exam.max_score = maxScore
+      })
+      enqueueWrite('exams.setMaxScore', `${paperLabel(db.exams.find((e) => e._id === examId))} — out of ${maxScore}`, {
+        examId,
+        maxScore,
       })
       return { ok: true as const }
     },
@@ -411,6 +462,12 @@ export const api = {
           draft.reportCards.push(created)
           result = created
         }
+      })
+      const learner = db.students.find((s) => s._id === studentId)
+      enqueueWrite('reportCards.upsert', `Report card · ${learner?.full_name ?? 'Learner'}`, {
+        studentId,
+        termId,
+        patch,
       })
       return result as ReportCard
     },
@@ -536,6 +593,22 @@ export const api = {
       })
       return { ok: true as const }
     },
+    /**
+     * The teacher's own sign-in credential, written once during sign-up from the
+     * password they chose. Passing null clears it, which puts the account back to
+     * awaiting sign-up so a teacher who forgot their password can set a new one.
+     */
+    async setPassword(teacherId: string, credentials: { salt: string; hash: string } | null) {
+      mutate((draft) => {
+        const teacher = draft.teachers.find((t) => t._id === teacherId)
+        if (!teacher) return
+        teacher.password_salt = credentials?.salt ?? null
+        teacher.password_hash = credentials?.hash ?? null
+        teacher.activated_at = credentials ? now() : null
+      })
+      return { ok: true as const }
+    },
+
     /** Refused while the staff member still holds lessons on the timetable. */
     async remove(teacherId: string) {
       const lessons = db.timetableSlots.filter((slot) => slot.teacher_id === teacherId).length

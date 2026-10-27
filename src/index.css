@@ -653,3 +653,17 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── the installed app on a touch device ────────────────────────────────
+   iOS Safari zooms the whole page when a control smaller than 16 px takes
+   focus, which throws a mark register around in the middle of entry. Touch
+   devices get 16 px controls; a pointer device keeps the dense 13 px grid. */
+@media (pointer: coarse) {
+  .input-field,
+  .select-field,
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

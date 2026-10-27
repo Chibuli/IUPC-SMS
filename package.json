@@ -16,15 +16,24 @@
     "verify:e2e": "node scripts/e2e.mjs",
     "verify:layout": "node scripts/layout.mjs",
     "verify:smoke": "node scripts/smoke.mjs",
-    "verify:migration": "node scripts/migration-check.mjs"
+    "verify:migration": "node scripts/migration-check.mjs",
+    "verify:offline": "node scripts/verify-offline.mjs",
+    "verify:signup": "node scripts/verify-signup.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "toolchain": "bash scripts/android-toolchain.sh",
+    "apk": "bash scripts/build-apk.sh",
+    "android:sync": "npm run build && npx cap sync android"
   },
   "dependencies": {
+    "@capacitor/core": "^7.6.9",
     "lucide-react": "^0.545.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.4"
   },
   "devDependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.1",
@@ -33,6 +42,7 @@
     "puppeteer-core": "^25.15.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vite-plugin-pwa": "^2.0.0"
   }
 }

@@ -15,3 +15,12 @@ screenshots/*.jpg
 inspection/
 listing.txt
 SETUP_PACKAGE_*.zip
+
+# Android toolchain and build output (see scripts/android-toolchain.sh)
+.android/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/app/src/main/assets/public/
+*.apk
+*.aab

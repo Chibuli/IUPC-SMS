@@ -24,6 +24,7 @@ export default function Settings() {
   const [permissionsOpen, setPermissionsOpen] = useState(false)
 
   const mayEnterMarks = db.teachers.filter((teacher) => hasPermission(teacher, 'marks.enter')).length
+  const awaitingSignUp = db.teachers.filter((teacher) => !teacher.password_hash).length
   const closing = db.markWindows[0]?.closes_at ?? null
 
   useEffect(() => {
@@ -111,7 +112,8 @@ export default function Settings() {
             <div className="card p-4">
               <p className="text-[12.5px] leading-relaxed text-ink/60">
                 Every teacher account starts read-only, whatever subjects it holds. Open the list to grant or reduce
-                what each teacher may do, and to set the date marks close for the term.
+                what each teacher may do, and to set the date marks close for the term. A teacher who has never signed
+                up holds no password yet and appears there as awaiting sign-up.
               </p>
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
                 <div>
@@ -122,6 +124,12 @@ export default function Settings() {
                   <dt className="micro">Read-only</dt>
                   <dd className="mt-0.5 text-ink/80">
                     {db.teachers.length - mayEnterMarks} teacher{db.teachers.length - mayEnterMarks === 1 ? '' : 's'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="micro">Awaiting sign-up</dt>
+                  <dd className="mt-0.5 text-ink/80" data-count="awaiting-signup">
+                    {awaitingSignUp} teacher{awaitingSignUp === 1 ? '' : 's'}
                   </dd>
                 </div>
                 <div className="col-span-2">

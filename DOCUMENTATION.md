@@ -32,6 +32,7 @@ backend by rewriting one module.
    - [5.10 Broadsheets](#510-broadsheets)
    - [5.11 Report Cards](#511-report-cards)
    - [5.12 Settings](#512-settings)
+   - [5.13 Offline capture and the installed app](#513-offline-capture-and-the-installed-app)
 6. [UI and design system](#6-ui-and-design-system)
 7. [Printing and export](#7-printing-and-export)
 8. [Grading engine](#8-grading-engine)
@@ -152,8 +153,9 @@ The session (`role`, `schoolId`, optional `teacherId`) is persisted in `localSto
 `meridian.session.v1`, so a reload keeps you signed in.
 
 > **Security note:** this is a front-end demonstration layer. Passwords are salted and hashed with
-> SHA-256 via WebCrypto (`salt:password`), but SHA-256 is not a password KDF, and all checks happen
-> in the browser. Production requires server-side enforcement.
+> SHA-256 via WebCrypto (`salt:password`) — a fresh 16-byte salt per teacher from
+> `crypto.getRandomValues` when they sign up — but SHA-256 is not a password KDF, and all checks
+> happen in the browser. Production requires server-side enforcement and Argon2id/bcrypt.
 
 ---
 
@@ -165,15 +167,37 @@ Split layout: a dark editorial panel on the left with the product statement and 
 the credential card on the right.
 
 - **Role selector** — Administrator or Teacher tab; the form changes its username label accordingly.
-- **School code** field (e.g. `RVA-01`), matched case- and whitespace-insensitively.
 - **Username / email** and **password** with a show/hide toggle.
-- **Continue with Google** — a local stand-in for OAuth: it opens a mocked Google account chooser
-  listing the campus's administrator and teacher accounts, and signs in with the selected one.
-- **Preview this campus as a guest (read-only)** — enters with the guest role.
-- **Demo campus hint** — when the code matches a seeded campus, the card reveals the demo
-  credentials (`admin` / `meridian`, or staff email / `meridian`).
-- **Register a school** link to the three-step sign-up flow.
+- **Create your account** — opens the sign-up view (below).
+- **Preview as guest (read-only)** — enters with the guest role.
+- **Demo credential hint** — the card reveals the seeded credentials (`admin` / `iupc`, or
+  `g.wanjiru@iupc.academy` / `iupc`).
+- When a teacher address is typed that is on the register but has no password yet, the form says so
+  and offers the sign-up view pre-filled with that address.
 - Validation errors are announced inline in an alert region; the password field is never echoed.
+
+### Create your account (sign-up)
+
+The same card, in a second view. **Sign-up is invitation-only**: the registrar records a person and
+an email address on the staff register, and only an address already on that register can become an
+account. Nothing else grants access, and there is no way to sign up around the register.
+
+- **Staff email** — looked up against the register as it is typed, and held quiet until the address
+  looks complete so a half-typed one shows no verdict. Three answers are possible:
+  - *not on the register* (red) — refused, and the submit button stays disabled however good the
+    password is; the copy sends them to the registrar.
+  - *on the register, no password yet* (green) — the teacher is named with their staff number and the
+    subjects the registrar assigned, and submit unlocks.
+  - *already has an account* (amber) — they are sent back to sign in.
+- **Choose a password** and **repeat the password**, seen through the same show/hide toggle.
+  Minimum 8 characters; the two must match. Both rules are checked before submit is enabled and
+  again when the account is created.
+- On success the account is stamped with a **random per-teacher salt** and the hash of the chosen
+  password, `activated_at` is recorded, and the teacher is signed straight in with the teacher role.
+- The footer states how many teachers on the register are still waiting to sign up.
+
+Passwords are never stored in the clear, and the demo password does not carry over: a teacher who
+signs up cannot be entered with `iupc` afterwards.
 
 ### School registration (`/signup`)
 
@@ -308,17 +332,26 @@ One card per teacher carries:
 - **Teaches** — the subject codes the teacher holds. This is the read scope: exams, broadsheets, the
   overview and analytics show a teacher only the subjects on this list.
 - **Permissions** — the grants they hold, or "No write permissions — read-only account".
-- **Manage / Remove** (administrators) — a dialog over the same fields, showing the permission
-  catalogue as checkboxes. The highest staff number in use pre-fills the next one, and both the email
-  and the staff number must be unique. A teacher who still holds lessons on the timetable cannot be
-  removed; the refusal names how many lessons to reassign first.
-- **Find staff** filter and **Permissions** filter (all / may enter marks / read-only).
+- **Manage / Remove / Reset sign-in** (administrators) — a dialog over the same fields, showing the
+  permission catalogue as checkboxes. The highest staff number in use pre-fills the next one, and both
+  the email and the staff number must be unique. A teacher who still holds lessons on the timetable
+  cannot be removed; the refusal names how many lessons to reassign first.
+- **Account state** on every card — *Account active*, with the date the teacher chose their password,
+  or *Awaiting sign-up* for a record that has never been entered.
+- **Find staff** filter and **Permissions** filter (all / may enter marks / read-only / awaiting sign-up).
 
 A **Register teacher** button sits in the top menu on every page for administrators, and again in the
 page header. The top-menu button deep-links to `/dashboard/teachers?register=1`, which opens the form
-immediately — registering a teacher is one click from anywhere. There is no invitation link and no
-default password: a registered teacher signs in with their staff email and the demo password until a
-real backend lands.
+immediately — registering a teacher is one click from anywhere.
+
+Recording a teacher is **not** an account. The register stores the person, the subjects they hold and
+their permissions; the teacher then creates their own password at the sign-in page with that email
+address (see *Create your account* above). Until they do, the account cannot be entered at all and the
+register shows it as awaiting sign-up.
+
+**Reset sign-in** clears a stored password — the remedy when a teacher forgets theirs — and puts the
+record back to awaiting sign-up so they choose a new one. It touches the credential only: subjects and
+permissions are kept.
 
 The **How access works** note at the foot of the page states the model in one place: subject access
 scopes what a teacher sees, permissions decide what they may write, and every account starts read-only.
@@ -709,6 +742,51 @@ on save so old data is never destroyed.
 
 ---
 
+### 5.13 Offline capture and the installed app
+
+Not a page: a property of the whole system, in [`src/lib/offline.ts`](src/lib/offline.ts) and
+[`src/components/SyncStatus.tsx`](src/components/SyncStatus.tsx).
+
+A mark is keyed in a classroom, an exam hall or a staffroom where the network comes and goes, so no
+write may depend on the connection being up.
+
+- **The app installs on the device.** A web manifest, a service worker and a full icon set make it an
+  installable app on Android (Chrome → **Install app**) and on iPhone (Safari → Share → **Add to Home
+  Screen**). It opens in its own window with no browser chrome, and the shell is precached — so it
+  opens with **no connection at all**, which is what makes offline entry possible in the first place.
+  The Google Fonts the interface is set in are cached on first load too.
+- **Nothing is lost when the signal drops.** Every write lands in the device database first and is
+  appended to a durable outbox in the same breath — `marks.setScore`, `marks.setRemarks`,
+  `exams.ensure`, `exams.setMaxScore` and `reportCards.upsert`. The outbox keeps its own storage key
+  (`iupc.outbox.v1`, beside the database and the session), so rebuilding the database can never
+  discard records that have not left the device yet.
+- **The queue drains in order.** Records leave in the order they were keyed: a paper created by a
+  result keyed offline is queued ahead of that result. A record leaves the queue only once the
+  destination has accepted it, and a rejected record stays at the head with its attempt count raised —
+  nothing behind it is sent ahead of it.
+- **The shell says where the records are.** A pill in the header (icon only on a phone) reads
+  `Offline · 7 waiting`, `Sending 7…`, `7 waiting · not sent` or `Synced`. Opening it shows the
+  connection, what is waiting, when the last batch was sent, how many records this device has sent in
+  total, and every queued record named the way it was keyed — `Nancy Ruto · Mathematics 0862 ·
+  Year 8 A · CAT 2 — 28/40` — with a **Sync now** action.
+- **Touch sizing.** On a coarse pointer the controls are 16 px, so iOS cannot zoom the page when the
+  mark register takes focus, and the shell pads itself around a notched screen.
+
+**There is no server to send to yet.** This build ships without one, so the transport acknowledges a
+record against the device database, and the parts that are real are the durability, the ordering, the
+retry and the visible state. Point `VITE_SYNC_URL` at an endpoint and the same queue POSTs each record
+to `${VITE_SYNC_URL}/writes` instead — no page and no call site changes.
+
+**The same app is also an Android APK.** [`capacitor.config.json`](capacitor.config.json) wraps the
+existing build in a native shell — the same React app, the same local database, in a WebView served
+from the device rather than from a network. `npm run apk` produces a debug-signed, sideloadable APK:
+`com.iupc.academy`, `minSdkVersion 23` (Android 6 and newer, so Android 8 is covered),
+`targetSdkVersion 35`, launcher label **IUPC Academy**. Inside the shell the service worker is
+switched off — the assets already ship in the APK, so a worker would only keep a second copy and risk
+serving a stale one after an app update.
+
+---
+
 ## 6. UI and design system
 
 ### Visual identity
@@ -879,6 +957,8 @@ prefixed `loc` so seeded and locally-created rows are distinguishable.
   `timetable.save/remove`, `notes.create/remove`, `reportCards.upsert`, plus `resetDatabase()`.
   All are `async` and return row objects or `{ ok: true }`, matching the shape of Convex
   mutations/queries.
+- **Offline outbox:** each field write is also appended to a durable queue in the same store, and the
+  queue is what drains to a server when one exists — see [§5.13](#513-offline-capture-and-the-installed-app).
 - **Raw edits:** `mutate(fn)` is used by term, subject, logo and grading-scale operations that edit
   the tree directly.
 - **Migration path:** replacing this module with Convex client calls is the only change needed to go
@@ -912,7 +992,10 @@ and school registration validating name, unique code, email and password length.
 │   │   └── auth.ts              Credentials, sign-in, school registration
 │   ├── components/permissions.tsx
 │   │                            Access badges, permission toggles, registrar panel
+│   ├── components/SyncStatus.tsx
+│   │                            Sync pill and the queued-records panel
 │   ├── lib
+│   │   ├── offline.ts           Outbox, connectivity, ordered flush, transport seam
 │   │   ├── grading.ts           Bands, grades, points, score parsing
 │   │   ├── permissions.ts       Permission catalogue, access summary, window helpers
 │   │   ├── analytics.ts         Broadsheet builder, ranks, CSV, print helpers
@@ -971,6 +1054,40 @@ npm run build        # type-check + production bundle into dist/
 npm run preview      # serve the built bundle on http://127.0.0.1:4173
 ```
 
+### Building the Android app
+
+```bash
+npm run apk          # → IUPC-Academy.apk in the project root
+```
+
+The first run is the slow one: `scripts/android-toolchain.sh` downloads a JDK 21 and the Android SDK
+into `.android/` (about 2 GB, no administrator rights, nothing installed system-wide) and Gradle
+fetches its own distribution and the Android Gradle Plugin. Later runs take about a minute. Delete
+`.android/` once the APK exists to reclaim the space — the APK does not depend on it.
+
+What it produces is `android/app/build/outputs/apk/debug/app-debug.apk`, copied to `IUPC-Academy.apk`
+in the project root. Debug-signed, so a phone installs it once "install from this source" is allowed;
+**not** signed for the Play Store. Move it to the phone by USB, email or a cloud folder and tap it.
+
+`npm run android:sync` alone re-copies a web build into the native project, and `npm run icons`
+regenerates every asset cut from the logo — the favicon, the PWA icons, the launcher icon, the
+adaptive-icon foreground, all eleven splash screens, and the app's own crest and wordmark — from one
+source, so the imagery never drifts between the two distributions.
+
+That script measures rather than guesses. It splits `public/iupc-logo.png` into its connected ink
+shapes and picks each part out by its own bounds: the emblem is the tallest single shape (61 px
+against 38 px for the letters) and the tagline is the run of 6 px shapes along the bottom. It then
+enlarges with its own Catmull-Rom resampler, because the source emblem is only 52×61 px and the
+canvas API's own scaling is bilinear, which would leave a mark that small visibly soft at the 4× to
+8× a launcher asks for. Two refinements keep that enlargement honest: each channel is clamped to the
+range its own taps spanned, so the interpolation cannot ring a pale fringe around the figure, and
+resampled edges are drawn back toward the artwork's three flat inks by an amount that scales with
+the enlargement — so an asset cut near its true size keeps the artwork's own anti-aliasing untouched.
+
+The icons carry the emblem on the artwork's own white ground rather than on the brand crimson: the
+dome is crimson and the figure black, so a crimson ground would swallow the dome the mark is built
+around. The splash screens have room for the full lockup and use it.
+
 The dev server binds to `127.0.0.1` only, so it is reachable from your machine but not your local
 network. To demo on a phone or tablet, start Vite with `npm run dev -- --host 0.0.0.0` and open the
 `Network` URL it prints (same Wi-Fi required).
@@ -981,7 +1098,13 @@ network. To demo on a phone or tablet, start Vite with `npm run dev -- --host 0.
   fresh copy of the snapshot. **Settings → Restore snapshot** does the same deliberately.
 - `localStorage` holds the whole database and campus logos; a very large logo library can approach
   browser storage limits (logos are capped at 384 px to keep this small).
-- Fonts load from Google Fonts. Fully offline use needs those files self-hosted.
+- Fonts load from Google Fonts on first visit, and the service worker caches them, so an installed
+  copy is set in its real typeface with no connection. Self-host them if the campus network blocks
+  the CDN outright.
+- The **installed app** gets its icons from `public/pwa-*.png`, `public/favicon.png` and
+  `public/apple-touch-icon.png`, all cut from the supplied logo by `npm run icons`. Install it from a
+  **secure origin** — Chrome only offers installation over HTTPS or on `localhost`; a plain
+  `http://192.168.x.x` address will not install, though the app still opens there.
 - To point at a real backend later, replace the `api` object in `src/data/db.ts` with Convex client
   calls; pages already treat it as async and database-shaped.
 
@@ -1120,6 +1243,15 @@ Checks run against the current code:
   preview, the missing-result warning, the settle-on-leave X marks and finding an already recorded
   paper again are all asserted; the mark sheet prints on `@page report` as **1 page**, and
   `/dashboard/exams` is checked to hand over to `/dashboard/marks-entry`.
+- **Offline capture and the installed app:** the manifest and every icon are fetched and checked to
+  be the real PNG size they claim; the shell's iOS install tags are asserted; the service worker is
+  checked to install, activate and control the page; with the network cut, the app is checked to boot
+  from its own cache with the register intact; three results keyed offline are checked to be saved on
+  the device and queued, with the paper they created queued ahead of them; the pill is checked to
+  read `Offline · N waiting`; reopening the app offline is checked to keep every queued record and the
+  marks themselves; reconnecting is checked to drain the queue to `Synced` with the marks still there;
+  and on an emulated touch screen every control is checked to be 16 px with the phone header fitting
+  without overflow.
 - **Performance deck:** the slide count matches `6 + 2 × year groups`; the best-stream tile is checked
   against the closing-term means recomputed from storage, including the term it names; every chart bar
   is checked to sit at the value it labels; one slide shows at a time and the counter tracks it;
@@ -1128,8 +1260,8 @@ Checks run against the current code:
   one slide per page (twenty slides with the seven year groups).
 
 There is **no unit-test runner and no lint script** in the project; validation is the headless-Chrome
-suites under `scripts/` (e2e, layout, print/PDF, smoke, migration), type-checking and the production
-build.
+suites under `scripts/` (e2e, layout, print/PDF, offline/installed-app, smoke, migration),
+type-checking and the production build.
 
 ---
 
@@ -1139,8 +1271,9 @@ build.
 
 - **Front-end only.** No server, no multi-user sync; data is browser-local and clearing storage loses
   edits (recoverable via Restore snapshot).
-- **Demo authentication.** SHA-256 with salt is not a password KDF; the Google flow is a mocked
-  account chooser. Both must be replaced by real Convex Auth/OAuth.
+- **Demo authentication.** SHA-256 with salt is not a password KDF, and the seeded demo accounts
+  share one password. Teachers who sign up get their own random salt and their own password, but the
+  hash still has to be replaced by a real password KDF behind a server.
 - **No PDF library.** "Export PDF" uses the system print dialog.
 - **Students and classes can be created, not edited.** Admission and new-stream dialogs write through
   `api.students.create` / `api.classes.create`, but there is no edit or delete form for a student, a
@@ -1149,16 +1282,30 @@ build.
 - **A mis-keyed paper cannot be deleted.** A paper is recorded by the first result keyed in, and its
   total can be changed from the bar, but choosing the wrong type, class or term leaves a paper that
   the UI cannot remove — Settings → Restore snapshot is the way back.
-- **Invitation link is presented, not enforced.** `/invite/{code}` has no route or claim flow.
+- **Sign-up is gated on the register, and nothing else.** The gate is the staff register: an email
+  that is not on it cannot become an account, whatever is typed. What is missing is the delivery —
+  the registrar still has to tell the teacher that they have been added, because no mail is sent.
+- **A password cannot be changed by the teacher.** Choosing one happens once, at sign-up. Only the
+  registrar's **Reset sign-in** replaces it, which clears it rather than setting a new one.
 - **Single-campus session.** No campus switcher once signed in.
-- **No audit trail, soft delete, or offline/conflict handling** for edits.
+- **Offline records have no server to reach.** Whatever is keyed offline is durable on the device and
+  queued in order, but until `VITE_SYNC_URL` points at an endpoint the queue is acknowledged locally
+  and two devices never see each other's records. There is still no conflict resolution between
+  devices for the same paper.
+- **The APK is debug-signed and Android-only.** The Capacitor shell is real and the APK installs, but
+  there is no Play Store listing, no signed release build (that needs a keystore and a signing config)
+  and no iOS project (that needs a Mac with Xcode). `navigator.onLine` is also only the browser's own
+  guess at connectivity, so a captive portal can look online while the server is unreachable.
+- **No audit trail or soft delete** for edits.
 
 **Natural next steps**
 
-1. Replace `src/data/db.ts` with Convex queries/mutations and move RBAC to server-side functions.
+1. Replace `src/data/db.ts` with Convex queries/mutations, move RBAC to server-side functions, and
+   swap the SHA-256 demo hash for Argon2id behind the sign-up and sign-in calls.
 2. Editing students and streams (guardian changes, transfers between streams, alumni promotion), with
    CSV import and guardian management.
-3. Complete the invitation and teacher-onboarding flow, including password reset.
+3. Delivering the sign-up invitation by email, and letting a signed-in teacher change their own
+   password rather than waiting for the registrar to clear it.
 4. Timetable term copy/repeat, room-based clash detection, and drag-to-move slots.
 5. Report card bulk generation with a print queue, plus principal sign-off workflow.
 6. Fee, attendance-register and communication modules.

@@ -21,6 +21,7 @@ import {
 import { useDb } from './data/db'
 import { useSession } from './session'
 import { SchoolCrest } from './components/ui'
+import { SyncPill } from './components/SyncStatus'
 
 interface NavItem {
   to: string
@@ -132,17 +133,20 @@ export default function AppLayout() {
   return (
     <div className="min-h-screen bg-paper print:min-h-0">
       {/* ── mobile bar ─────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-rule bg-raised px-4 py-2.5 md:hidden no-print">
+      <div className="sticky top-0 z-40 flex items-center justify-between gap-2 border-b border-rule bg-raised px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] md:hidden no-print">
         <button type="button" className="btn btn-sm" onClick={() => setDrawer(true)} aria-label="Open navigation">
           <Menu size={15} />
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <SchoolCrest school={school} size={24} />
-          <span className="text-[13px] font-semibold">{school.name}</span>
+          <span className="truncate text-[13px] font-semibold">{school.name}</span>
         </div>
-        <button type="button" className="btn btn-sm" onClick={signOutNow} aria-label="Sign out">
-          <LogOut size={14} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <SyncPill surface="light" compact />
+          <button type="button" className="btn btn-sm" onClick={signOutNow} aria-label="Sign out">
+            <LogOut size={14} />
+          </button>
+        </div>
       </div>
 
       {/* ── desktop top bar ────────────────────────────────────────── */}
@@ -159,6 +163,7 @@ export default function AppLayout() {
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2.5">
+            <SyncPill surface="dark" />
             {session?.role === 'admin' ? (
               <Link
                 to="/dashboard/teachers?register=1"
@@ -240,7 +245,7 @@ export default function AppLayout() {
       {/* The timetable is a week-wide wall chart: capping it at the reading
           column would force forty period columns back into a scroller. */}
       <main
-        className={`mx-auto px-4 py-6 md:px-6 md:py-6 xl:px-8 print:max-w-none print:p-0 ${
+        className={`mx-auto px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 md:px-6 md:py-6 xl:px-8 print:max-w-none print:p-0 ${
           wide ? 'max-w-none 2xl:max-w-[1600px]' : 'max-w-6xl'
         }`}
       >

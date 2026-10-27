@@ -21,6 +21,19 @@ export function AccessBadge({ teacher }: { teacher: Pick<Teacher, 'permissions'>
 }
 
 /**
+ * Whether the teacher has ever chosen a password. This is a different question
+ * from what the account may do — someone can hold subjects and be read-only, and
+ * still have no way to sign in at all — so the registrar reads both here.
+ */
+export function AccountBadge({ teacher }: { teacher: Pick<Teacher, 'password_hash'> }) {
+  return teacher.password_hash ? (
+    <Badge tone="neutral">Account active</Badge>
+  ) : (
+    <Badge tone="brass">Awaiting sign-up</Badge>
+  )
+}
+
+/**
  * The catalogue as checkboxes. Used both on a teacher's record and in the
  * registrar's school-wide permissions list, so a grant means the same thing
  * wherever it is made.
@@ -76,6 +89,7 @@ export function TeacherPermissionsPanel({ open, onClose }: { open: boolean; onCl
   const [saved, setSaved] = useState(false)
 
   const entering = db.teachers.filter((teacher) => hasPermission(teacher, 'marks.enter')).length
+  const awaiting = db.teachers.filter((teacher) => !teacher.password_hash).length
 
   async function saveWindow(value: string | null) {
     await api.markWindow.save(value ? new Date(value).toISOString() : null)
@@ -138,7 +152,13 @@ export function TeacherPermissionsPanel({ open, onClose }: { open: boolean; onCl
       </section>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-        <SectionTitle right={<span className="text-[11px] text-ink/45">{entering} of {db.teachers.length} may enter marks</span>}>
+        <SectionTitle
+          right={
+            <span className="text-[11px] text-ink/45" data-count="awaiting-signup">
+              {entering} of {db.teachers.length} may enter marks · {awaiting} awaiting sign-up
+            </span>
+          }
+        >
           Staff permissions
         </SectionTitle>
       </div>
@@ -188,6 +208,7 @@ export function TeacherPermissionsPanel({ open, onClose }: { open: boolean; onCl
                     {teacher.email} · {teacher.employee_id}
                   </p>
                 </div>
+                <AccountBadge teacher={teacher} />
                 <AccessBadge teacher={teacher} />
                 {granted.length > 0 ? (
                   <button
@@ -226,7 +247,9 @@ export function TeacherPermissionsPanel({ open, onClose }: { open: boolean; onCl
       <p className="mt-4 border-t border-rule pt-3 text-[11px] leading-relaxed text-ink/45">
         Every account starts read-only and only ever writes what is granted here. Permissions are also summarised
         on each teacher’s record on the register, with the catalogue: {PERMISSIONS.map((entry) => entry.label).join(' · ')}.
-        Enforcement runs in this browser build; the same checks move server-side behind the <code>api</code> seam.
+        Sign-in is separate: a teacher with no password has been recorded but never signed up, and creates their own
+        password from the sign-in page. Enforcement runs in this browser build; the same checks move server-side
+        behind the <code>api</code> seam.
       </p>
     </Modal>
   )
