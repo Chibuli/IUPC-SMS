@@ -123,7 +123,12 @@ export default function MarksEntry() {
   const locked = !permission.editable
 
   const roster = useMemo(() => {
-    const rows = db.students.filter((student) => student.class_id === picked.class_id && student.status === 'Active')
+    const rows = db.students.filter(
+      (student) =>
+        student.class_id === picked.class_id &&
+        student.status === 'Active' &&
+        (!student.subject_ids || student.subject_ids.includes(picked.subject_id)),
+    )
     const byAdmission = (a: Student, b: Student) => a.admission_number.localeCompare(b.admission_number)
     if (sortKey === 'name') {
       return [...rows].sort((a, b) => a.full_name.localeCompare(b.full_name) || byAdmission(a, b))
@@ -132,7 +137,7 @@ export default function MarksEntry() {
       return [...rows].sort((a, b) => a.gender.localeCompare(b.gender) || a.full_name.localeCompare(b.full_name))
     }
     return [...rows].sort(byAdmission)
-  }, [db.students, picked.class_id, sortKey])
+  }, [db.students, picked.class_id, picked.subject_id, sortKey])
 
   const markFor = (studentId: string) =>
     paper ? db.marks.find((mark) => mark.exam_id === paper._id && mark.student_id === studentId) : undefined
@@ -277,7 +282,12 @@ export default function MarksEntry() {
     const row = db.exams.find((entry) => entry._id === examId)
     if (!row) return []
     return db.students
-      .filter((student) => student.class_id === row.class_id && student.status === 'Active')
+      .filter(
+        (student) =>
+          student.class_id === row.class_id &&
+          student.status === 'Active' &&
+          (!student.subject_ids || student.subject_ids.includes(row.subject_id)),
+      )
       .filter((student) => {
         const mark = db.marks.find((entry) => entry.exam_id === examId && entry.student_id === student._id)
         return !mark || mark.score === null

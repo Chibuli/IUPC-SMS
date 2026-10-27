@@ -89,6 +89,8 @@ export interface Student {
   gender: 'Male' | 'Female'
   date_of_birth: string
   class_id: ID
+  /** Subjects this learner is enrolled in; absent on legacy records means class-wide curriculum. */
+  subject_ids?: ID[]
   guardian_name: string
   guardian_phone: string
   status: 'Active' | 'Alumni'

@@ -6,6 +6,7 @@ import { useSession } from '../session'
 import { Avatar, Badge, EmptyState, Field, GradePill, Modal, PageHeader, SectionTitle } from '../components/ui'
 import { displayScore, gradeFor, gradeForMark, resolveScale } from '../lib/grading'
 import { formatDate, formatDateTime, ordinal, round } from '../lib/format'
+import { offeredSubjects } from '../lib/subjects'
 
 type SortKey = 'name' | 'admission' | 'class'
 
@@ -15,6 +16,7 @@ interface AdmissionForm {
   gender: 'Male' | 'Female'
   date_of_birth: string
   class_id: string
+  subject_ids: string[] | null
   guardian_name: string
   guardian_phone: string
 }
@@ -25,6 +27,7 @@ const BLANK_ADMISSION: AdmissionForm = {
   gender: 'Female',
   date_of_birth: '',
   class_id: '',
+  subject_ids: null,
   guardian_name: '',
   guardian_phone: '',
 }
@@ -74,6 +77,18 @@ export default function Students() {
   }, [])
 
   const scale = resolveScale(db.gradingScales)
+  const offered = useMemo(() => offeredSubjects(db.subjects), [db.subjects])
+  const classSubjects = useMemo(() => {
+    const classPapers = db.exams.filter((exam) => exam.class_id === form.class_id)
+    const paperSubjectIds = new Set(classPapers.map((exam) => exam.subject_id))
+    const offeredInClass = offered.filter((subject) => paperSubjectIds.has(subject._id))
+    if (offeredInClass.length) return offeredInClass
+
+    const classRow = db.classes.find((entry) => entry._id === form.class_id)
+    const year = Number(classRow?.class_name.match(/\d+/)?.[0])
+    const level = year >= 7 && year <= 9 ? 'Lower Secondary' : year >= 10 && year <= 11 ? 'IGCSE' : year >= 12 ? 'AS & A Level' : null
+    return level ? offered.filter((subject) => subject.level === level) : offered
+  }, [db.classes, db.exams, form.class_id, offered])
 
   const classLabel = (id: string) => {
     const cls = db.classes.find((c) => c._id === id)
@@ -130,6 +145,7 @@ export default function Students() {
       admission_number: nextAdmissionNumber(db.students.map((s) => s.admission_number)),
       // Start in whichever class the roster is currently filtered to.
       class_id: presetClass ?? (classId !== 'all' ? classId : db.classes[0]?._id ?? ''),
+      subject_ids: null,
     })
     setFormError('')
     setAdding(true)
@@ -150,6 +166,7 @@ export default function Students() {
       gender: form.gender,
       date_of_birth: form.date_of_birth,
       class_id: form.class_id,
+      subject_ids: form.subject_ids ?? classSubjects.map((subject) => subject._id),
       guardian_name: form.guardian_name.trim(),
       guardian_phone: form.guardian_phone.trim(),
       status: 'Active',
@@ -160,6 +177,7 @@ export default function Students() {
         ...BLANK_ADMISSION,
         admission_number: nextAdmissionNumber([...db.students.map((s) => s.admission_number), admissionNumber]),
         class_id: form.class_id,
+        subject_ids: null,
       })
       setFormError('')
     } else {
@@ -498,7 +516,7 @@ export default function Students() {
               <select
                 className="select-field"
                 value={form.class_id}
-                onChange={(event) => setForm({ ...form, class_id: event.target.value })}
+                onChange={(event) => setForm({ ...form, class_id: event.target.value, subject_ids: null })}
               >
                 <option value="">Choose a class</option>
                 {db.classes.map((cls) => (
@@ -543,6 +561,35 @@ export default function Students() {
               />
             </Field>
           </div>
+          <fieldset className="rounded border border-rule p-3">
+            <legend className="px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/55">Subjects enrolled</legend>
+            <p className="mb-2 text-[11px] text-ink/45">Select the subjects this student will study. The class curriculum is selected by default; you may change it or clear every subject.</p>
+            {classSubjects.length ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {classSubjects.map((subject) => {
+                  const checked = form.subject_ids === null || form.subject_ids.includes(subject._id)
+                  return (
+                    <label key={subject._id} className="flex min-h-9 cursor-pointer items-center gap-2 rounded border border-rule px-2.5 py-1.5 text-[12px] hover:bg-sunken">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setForm((current) => ({
+                          ...current,
+                          subject_ids: checked
+                            ? (current.subject_ids ?? classSubjects.map((entry) => entry._id)).filter((id) => id !== subject._id)
+                            : [...(current.subject_ids ?? classSubjects.map((entry) => entry._id)), subject._id],
+                        }))}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{subject.name}</span>
+                      <span className="font-mono text-[10px] text-ink/45">{subject.code}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-ink/45">Choose a class with offered subjects to configure enrolment.</p>
+            )}
+          </fieldset>
           {formError ? (
             <p role="alert" className="rounded border border-danger/30 bg-danger/8 px-3 py-2 text-[12px] text-danger">
               {formError}
