@@ -1,0 +1,655 @@
+@import "tailwindcss";
+
+@theme {
+  --color-crimson: #c8102e;
+  --color-crimson-deep: #a30014;
+  --color-brass: #c5a059;
+  --color-brass-deep: #876b27;
+  --color-ink: #111827;
+  --color-paper: #f9fafb;
+  --color-raised: #ffffff;
+  --color-sunken: #f3f4f6;
+  --color-rule: #e5e7eb;
+  --color-ok: #15803d;
+  --color-warn: #d97706;
+  --color-danger: #dc2626;
+
+  /* ── performance deck ────────────────────────────────────────────────
+     The palette of the department's printed report: deep teal ground, teal
+     primary, sand and sun for series, coral for anything that needs
+     intervention. Charts are drawn from these, so a slide and its legend
+     always agree. */
+  --color-deck-deep: #1a3a4a;
+  --color-deck-ink: #264653;
+  --color-deck-teal: #2a9d8f;
+  --color-deck-sand: #e9c46a;
+  --color-deck-sun: #f4a261;
+  --color-deck-coral: #e76f51;
+  --color-deck-cream: #f7f5f0;
+  --color-deck-mute: #757575;
+
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-display: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+    text-wrap: balance;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-crimson);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: #c8102e1f;
+  }
+}
+
+@layer components {
+  /* ── typography helpers ───────────────────────────────────────── */
+  .micro {
+    @apply text-[11px] font-medium uppercase tracking-[0.14em] text-ink/50;
+  }
+  .figure {
+    font-variant-numeric: tabular-nums;
+    @apply font-mono;
+  }
+  .display-figure {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    @apply tracking-tight;
+  }
+
+  /* ── surfaces ─────────────────────────────────────────────────── */
+  .card {
+    @apply rounded-lg border border-rule bg-raised;
+    box-shadow: 0 1px 2px rgb(17 24 39 / 0.04);
+  }
+  .card-hover {
+    @apply transition duration-200;
+  }
+  .card-hover:hover {
+    @apply border-brass/60;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgb(17 24 39 / 0.07);
+  }
+
+  /* ── buttons ──────────────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-rule bg-raised px-3 py-2 text-[13px] font-medium text-ink transition;
+    @apply hover:border-ink/25 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply border-crimson bg-crimson text-white hover:border-crimson-deep hover:bg-crimson-deep;
+  }
+  .btn-danger {
+    @apply border-danger/40 bg-danger/5 text-danger hover:border-danger hover:bg-danger/10;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-[12px];
+  }
+
+  /* ── forms ────────────────────────────────────────────────────── */
+  .field-label {
+    @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/55;
+  }
+  .input-field,
+  .select-field {
+    @apply w-full rounded-md border border-rule bg-raised px-3 py-2 text-[13px] text-ink transition;
+    @apply placeholder:text-ink/35 focus:border-crimson focus:ring-2 focus:ring-crimson/15 focus:outline-none;
+  }
+  .select-field {
+    @apply cursor-pointer appearance-none bg-no-repeat pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23111827' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-position: right 0.75rem center;
+  }
+
+  /* ── tables (the records-office grid) ─────────────────────────── */
+  .data-table {
+    @apply w-full border-collapse text-left text-[13px];
+  }
+  .data-table thead th {
+    @apply border-b border-rule bg-sunken px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/55;
+  }
+  .data-table tbody td {
+    @apply border-b border-rule/70 px-3 py-2.5 align-middle;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr:hover {
+    background: #f9fafb;
+  }
+  .data-table .num {
+    @apply text-right;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+  }
+
+  /* ── chips / status ───────────────────────────────────────────── */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded border border-rule bg-sunken px-1.5 py-0.5 text-[11px] font-medium text-ink/70;
+  }
+  .chip-ok {
+    @apply border-ok/25 bg-ok/8 text-ok;
+  }
+  .chip-warn {
+    @apply border-warn/30 bg-warn/10 text-warn;
+  }
+  .chip-danger {
+    @apply border-danger/25 bg-danger/8 text-danger;
+  }
+  .chip-brass {
+    @apply border-brass/40 bg-brass/12 text-brass-deep;
+  }
+
+  /* ── timetable board ──────────────────────────────────────────── */
+  .board {
+    @apply w-full border-separate border-spacing-0;
+  }
+  .board th,
+  .board td {
+    @apply border-b border-r border-rule align-top;
+  }
+  .board thead th {
+    @apply sticky top-0 z-10 bg-sunken/95 px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/55 backdrop-blur;
+  }
+  .board tbody th {
+    @apply sticky left-0 z-10 w-[86px] bg-raised px-2 py-2 text-left align-top;
+  }
+  .slot {
+    @apply rounded border border-rule bg-raised p-1.5 text-left text-[11px] leading-tight transition;
+  }
+  .slot:hover {
+    @apply border-brass/70;
+    box-shadow: 0 3px 10px rgb(17 24 39 / 0.08);
+  }
+  .slot-clash {
+    @apply border-danger/50 bg-danger/5;
+    box-shadow: inset 3px 0 0 var(--color-danger);
+  }
+  .slot-empty {
+    @apply flex h-full min-h-[52px] items-center justify-center rounded border border-dashed border-rule/80 text-[10px] uppercase tracking-[0.12em] text-ink/25;
+  }
+
+  /* ── whole-school master grid ─────────────────────────────────── */
+  /* Classes on rows, every day × period on the header: the board is wider than
+     the screen by design, so both the class column and the two header rows stay
+     pinned while it scrolls. */
+  .master {
+    @apply border-separate border-spacing-0;
+    /* Fixed layout + explicit colgroup widths is what lets forty period columns
+       fit the viewport instead of stretching to their longest subject name. */
+    table-layout: fixed;
+  }
+  /* The frame around the master board belongs to its scroll viewport, not the
+     table: a border on the table itself would push the fitted columns 4px past
+     the panel and force a scrollbar. */
+  .master-frame {
+    @apply rounded-none;
+    border: 2px solid var(--color-ink);
+  }
+  .master-sheet-table {
+    border: 2px solid var(--color-ink);
+  }
+  .master th,
+  .master td {
+    @apply border-b border-r border-rule p-0 align-top;
+  }
+  .master thead th {
+    @apply bg-sunken px-1 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/55;
+    position: sticky;
+    z-index: 12;
+  }
+  .master thead tr:first-child th {
+    @apply top-0 h-[30px];
+    z-index: 14;
+  }
+  .master thead tr:nth-child(2) th {
+    @apply top-[30px] h-[28px] bg-raised;
+    z-index: 13;
+  }
+  .master thead th.master-day {
+    @apply border-l border-l-ink/15 text-[11px] tracking-[0.14em] text-ink/70;
+  }
+  .master thead th.master-corner {
+    @apply left-0 z-20 border-l-0 bg-ink px-2 text-left text-[10px] text-white/70;
+  }
+  .master thead th.master-gap,
+  .master td.master-gap {
+    border-left-width: 2px;
+    border-left-color: rgb(17 24 39 / 0.22);
+  }
+  .master tbody th.master-class {
+    @apply left-0 z-[9] border-l-0 bg-raised px-2 py-1.5 text-left align-middle;
+    position: sticky;
+  }
+  .master td.master-cell {
+    @apply relative p-[2px];
+    height: 64px;
+    vertical-align: middle;
+  }
+  .master-slot {
+    @apply relative flex w-full flex-col overflow-hidden rounded-none px-1.5 py-1 text-left;
+    border-width: 1px;
+    border-left-width: 4px;
+    height: 100%;
+    min-height: 0;
+  }
+  /* At a fitted width the cell is a colour block: the code sits centred and the
+     border carries the subject's colour. */
+  .master-slot--compact {
+    @apply items-center justify-center p-0;
+    border-left-width: 1px;
+  }
+  .master-slot:hover {
+    @apply border-ink/30;
+    box-shadow: 0 3px 10px rgb(17 24 39 / 0.1);
+  }
+  .master-grip {
+    @apply absolute right-[5px] top-[5px] z-10 rounded p-[1px] text-ink/25 transition hover:bg-sunken hover:text-ink/70;
+    opacity: 0;
+  }
+  .master-cell:hover .master-grip,
+  .master-grip:focus-visible,
+  .master-grip[aria-pressed='true'] {
+    opacity: 1;
+  }
+  /* A touch screen has no hover to reveal the grip, and a narrow window may be
+     a tablet: keep the handle visible rather than hiding the move affordance. */
+  @media (hover: none), (max-width: 767px) {
+    .master-grip {
+      opacity: 0.75;
+    }
+  }
+  .master-slot[aria-grabbed='true'] {
+    @apply opacity-40;
+  }
+  .master-cell.is-drop {
+    @apply bg-ok/8;
+    box-shadow: inset 0 0 0 2px var(--color-ok);
+  }
+  .master-cell.is-swap {
+    @apply bg-brass/10;
+    box-shadow: inset 0 0 0 2px var(--color-brass-deep);
+  }
+  .master-cell.is-source {
+    @apply bg-sunken;
+  }
+  .master-cell.is-flash {
+    animation: slot-flash 1.2s ease-out;
+  }
+
+  /* ── bordered period sheet: class / teacher timetable ─────────── */
+  /* One heavy frame, hairline rules, a big two-letter day in the gutter and the
+     two gaps in the day labelled vertically down the table's full height. The
+     screen board and the printed sheet share the shape; only the type differs. */
+  .period-board,
+  .tt-sheet {
+    @apply w-full border-collapse bg-white text-ink;
+    table-layout: fixed;
+    border: 2px solid var(--color-ink);
+  }
+  .period-board th,
+  .period-board td,
+  .tt-sheet th,
+  .tt-sheet td {
+    @apply align-middle;
+    border: 1px solid rgb(17 24 39 / 0.6);
+  }
+  .period-board thead th,
+  .tt-sheet thead th {
+    @apply bg-white p-0 text-center font-semibold;
+  }
+  /* Rotated column caption: reads bottom-to-top, like the printed original. */
+  .pb-rotate {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+  }
+
+  /* ── print ────────────────────────────────────────────────────── */
+  .print-only {
+    display: none;
+  }
+  .sheet {
+    @apply mx-auto bg-white text-ink;
+  }
+  /* A two-page document (results sheet + subject analysis) reads as two
+     stacked sheets on screen and as two printed pages. */
+  .sheet + .sheet {
+    margin-top: 1.75rem;
+  }
+  /* The page name must sit on the document root, otherwise the switch from the
+     default page to a named one inserts an empty leading page. */
+  body[data-page="timetable"] {
+    page: timetable;
+  }
+  body[data-page="master"] {
+    page: master;
+  }
+  body[data-page="broadsheet"] {
+    page: broadsheet;
+  }
+  body[data-page="report"] {
+    page: report;
+  }
+  body[data-page="classlist"] {
+    page: classlist;
+  }
+  body[data-page="analysis"] {
+    page: analysis;
+  }
+  body[data-page="deck"] {
+    page: deck;
+  }
+  .sheet-timetable {
+    page: timetable;
+  }
+  .sheet-master {
+    page: master;
+  }
+  .sheet-broadsheet {
+    page: broadsheet;
+  }
+  .sheet-report {
+    page: report;
+  }
+  /* Ruled space for handwritten remarks. The rules repeat at a fixed rhythm, so
+     a block that grows on paper gains more lines instead of stretching the few
+     it had into gaps too wide to write across. */
+  .write-area {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 23px,
+      rgb(17 24 39 / 0.3) 23px,
+      rgb(17 24 39 / 0.3) 24px
+    );
+  }
+  .sheet-classlist {
+    page: classlist;
+  }
+  /* The analytics report is a single portrait sheet: its tables and the
+     four-metric strip are laid out for A4, not for the screen. */
+  .analysis-sheet {
+    page: analysis;
+  }
+
+  /* ── performance deck ─────────────────────────────────────────────── */
+  /* One 16:9 slide at a time, letterboxed inside the page like the slide show
+     it is. The whole deck is in the DOM; only the active slide is displayed, so
+     printing can reveal every one without a second render pass. */
+  .deck-slide {
+    display: flex;
+    flex-direction: column;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: var(--color-deck-cream);
+    color: var(--color-deck-ink);
+  }
+  .deck-slide[data-active='false'] {
+    display: none;
+  }
+  /* A 16:9 canvas is only ~220px tall on a phone, too short to hold a chart and
+     its reading: below the tablet breakpoint the slide grows to its content. */
+  @media (max-width: 767px) {
+    .deck-slide {
+      aspect-ratio: auto;
+    }
+  }
+  .deck-slide--cover {
+    background: var(--color-deck-deep);
+    color: #fff;
+  }
+  .deck-kicker {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-deck-teal);
+  }
+  .deck-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.08;
+  }
+  .deck-foot {
+    border-top: 1px solid rgb(38 70 83 / 0.18);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  /* Chart primitives: columns are flex children of a fixed-height plot, so a
+     series bar is simply a percentage of the plot's height. */
+  .deck-plot {
+    position: relative;
+    height: 100%;
+  }
+  .deck-gridline {
+    position: absolute;
+    inset-inline: 0;
+    border-top: 1px dashed rgb(38 70 83 / 0.16);
+  }
+  .deck-bar {
+    border-radius: 2px 2px 0 0;
+  }
+  .deck-tile {
+    border-top: 3px solid var(--color-deck-teal);
+    background: #fff;
+    box-shadow: 0 1px 2px rgb(38 70 83 / 0.08);
+  }
+  /* The stacked layout: every slide in one column, spaced on screen. */
+  .deck-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+@page timetable {
+  size: A4 landscape;
+  margin: 8mm;
+}
+/* The whole-school grid has forty period columns: it only reads on A3. */
+@page master {
+  size: A3 landscape;
+  margin: 8mm;
+}
+@page broadsheet {
+  size: A4 landscape;
+  margin: 8mm;
+}
+@page report {
+  size: A4 portrait;
+  margin: 10mm;
+}
+@page classlist {
+  size: A4 portrait;
+  margin: 10mm;
+}
+@page analysis {
+  size: A4 portrait;
+  margin: 8mm;
+}
+/* A slide is landscape by definition, so the deck takes A4 landscape. */
+@page deck {
+  size: A4 landscape;
+  margin: 8mm;
+}
+
+@media print {
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-page {
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+  /* The app shell must not add a page of its own: the min-height and the
+     shell padding both overflow the printable area. */
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  .sheet {
+    margin: 0 !important;
+  }
+  /* A timetable should own the sheet it is printed on, not float in the
+     top half of it: grow the rows to the printable height of A4 landscape. */
+  .sheet-timetable {
+    display: flex;
+    flex-direction: column;
+    min-height: 192mm;
+    break-inside: avoid;
+  }
+  .sheet-timetable > table {
+    height: 159mm;
+  }
+  .sheet-timetable > :last-child {
+    margin-top: auto;
+  }
+  /* `.print-only` forces display:block, so this sheet stacks its three blocks
+     normally: the grid takes the page height and the key follows it. */
+  /* A column, so the key and its signature line sit at the foot of the sheet
+     instead of crowding the last row of the grid. `.print-only` forces
+     display:block, hence the !important. */
+  .sheet-master {
+    display: flex !important;
+    flex-direction: column;
+    min-height: 265mm;
+    break-inside: avoid;
+  }
+  /* Table height is a minimum: four streams share the A3 page, ten streams grow
+     past it rather than squeezing the names into nothing. */
+  .sheet-master .master-sheet-table {
+    height: 200mm;
+  }
+  .sheet-master .master-sheet-key {
+    margin-top: auto;
+    padding-top: 3mm;
+  }
+  .sheet + .sheet {
+    margin-top: 0 !important;
+  }
+  /* The report card is a full A4 form: remarks and signature blocks sit at the
+     foot of the page, not in the middle of it. */
+  .sheet-report {
+    display: flex;
+    flex-direction: column;
+    min-height: 274mm;
+    width: 100%;
+    break-inside: avoid;
+  }
+  .sheet-report > .sheet-fill {
+    flex: 1 1 0;
+  }
+  .sheet-broadsheet {
+    display: flex;
+    flex-direction: column;
+    min-height: 192mm;
+    break-inside: avoid;
+  }
+  /* A twelve-name cohort should still read as a full-page register rather than
+     a strip at the top of the paper: the matrix rows take the spare height. */
+  .sheet-broadsheet--matrix > table {
+    flex: 1 1 auto;
+  }
+  .sheet-broadsheet--analysis .signoff {
+    margin-top: auto;
+  }
+  .analysis-sheet {
+    break-inside: avoid;
+  }
+  .avoid-break {
+    break-inside: avoid;
+  }
+  .page-break {
+    break-after: page;
+  }
+  /* Screen-only furniture (the live deck on the analytics page) is dropped from
+     the analytics sheet's own print run, and the slide stack takes over when
+     the deck names its page instead. */
+  .screen-only {
+    display: none !important;
+  }
+  body[data-page="deck"] .screen-only {
+    display: block !important;
+  }
+  body[data-page="deck"] .print-only {
+    display: none !important;
+  }
+  body[data-page="deck"] .deck-slide {
+    display: flex !important;
+    aspect-ratio: auto;
+    height: 190mm;
+    break-after: page;
+    break-inside: avoid;
+  }
+  body[data-page="deck"] .deck-slide:last-of-type {
+    break-after: auto;
+  }
+  body[data-page="deck"] .deck-nav {
+    display: none !important;
+  }
+  /* A slide is exactly one page tall, so the stack must carry no extra height:
+     any padding, gap or margin here pushes the last slide onto a blank page. */
+  body[data-page="deck"] .deck-root {
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+  }
+  body[data-page="deck"] .deck-stack {
+    gap: 0 !important;
+  }
+  body[data-page="deck"] .deck-section {
+    margin: 0 !important;
+  }
+}
+
+@keyframes slot-flash {
+  0% {
+    background-color: rgb(21 128 61 / 0.18);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

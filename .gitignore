@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.log
+.vite
+screenshots/*.png
+screenshots/*.pdf
+screenshots/*.jpg
+
+# Freebuff workspace marker — machine-local, not part of the app
+.freebuff/
+
+# Local scratch: unpacked vendor setup packages, never part of the app
+inspection/
+listing.txt
+SETUP_PACKAGE_*.zip

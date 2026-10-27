@@ -1,0 +1,38 @@
+{
+  "name": "iupc-academy",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "IUPC Academy school management system",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "verify:print": "node scripts/verify.mjs",
+    "verify:e2e": "node scripts/e2e.mjs",
+    "verify:layout": "node scripts/layout.mjs",
+    "verify:smoke": "node scripts/smoke.mjs",
+    "verify:migration": "node scripts/migration-check.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1",
+    "@vitejs/plugin-react": "^5.0.4",
+    "pdf-lib": "^1.17.1",
+    "puppeteer-core": "^25.15.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}
