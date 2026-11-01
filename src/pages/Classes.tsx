@@ -1,20 +1,25 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Building2, GraduationCap, Plus, Printer, Users } from 'lucide-react'
 import { api, useDb } from '../data/db'
+import { isOperationalStudent } from '../data/student-lifecycle'
 import { useSession } from '../session'
 import { Avatar, Badge, EmptyState, Field, Modal, PageHeader, SectionTitle, StatCard } from '../components/ui'
 import { AccessBadge } from '../components/permissions'
-import { formatDate } from '../lib/format'
 import { usePrintPage } from '../lib/print'
+import { ClassListPrint } from '../components/ClassListPrint'
 
 export default function Classes() {
   const db = useDb()
   const { session } = useSession()
-  const school = db.schools[0]
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
   const navigate = useNavigate()
+  const location = useLocation()
+  const printRequest = location.state as { printClassId?: string; sort?: string } | null
   usePrintPage('classlist')
-  const [printClassId, setPrintClassId] = useState<string | null>(null)
+  const [printClassId, setPrintClassId] = useState<string | null>(printRequest?.printClassId ?? null)
+  const [printTicket,setPrintTicket] = useState(printRequest?.printClassId ? 1 : 0)
+  const [printSort, setPrintSort] = useState(printRequest?.sort === 'admission' ? 'admission' : 'name')
   const [adding, setAdding] = useState(false)
   const [className, setClassName] = useState('')
   const [streamName, setStreamName] = useState('')
@@ -35,14 +40,15 @@ export default function Classes() {
   }, [db.classes])
 
   const rosterOf = (classId: string) =>
-    db.students.filter((student) => student.class_id === classId && student.status === 'Active')
+    db.students.filter((student) => student.class_id === classId && isOperationalStudent(student))
 
-  const printRows = printClassId ? rosterOf(printClassId) : []
+  const printRows = useMemo(() => db.students.filter(student=>student.class_id===printClassId&&isOperationalStudent(student)).sort((a,b) => printSort === 'admission' ? a.admission_number.localeCompare(b.admission_number) : a.full_name.localeCompare(b.full_name)),[db.students,printClassId,printSort])
   const printClass = printClassId ? db.classes.find((c) => c._id === printClassId) : null
-
+  const activeTerms = db.terms.filter(term=>term.is_active)
+  const printTerm = activeTerms.length === 1 ? activeTerms[0] : undefined
   function printList(classId: string) {
     setPrintClassId(classId)
-    window.setTimeout(() => window.print(), 60)
+    setPrintTicket(ticket=>ticket+1)
   }
 
   function startStream() {
@@ -112,7 +118,7 @@ export default function Classes() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 no-print">
-        <StatCard label="Active students" value={db.students.filter((s) => s.status === 'Active').length} icon={Users} />
+        <StatCard label="Active students" value={db.students.filter(isOperationalStudent).length} icon={Users} />
         <StatCard label="Streams" value={db.classes.length} hint={`${grouped.length} class groups`} icon={GraduationCap} tone="ink" />
         <StatCard label="Staff" value={db.teachers.length} icon={Building2} tone="brass" />
         <StatCard
@@ -125,6 +131,13 @@ export default function Classes() {
       </div>
 
       <section className="mt-7 no-print">
+        <label className="mb-3 block text-[12px]">
+          Print list order{' '}
+          <select aria-label="Print list order" className="select-field w-[160px]" value={printSort} onChange={event => setPrintSort(event.target.value)}>
+            <option value="name">Name</option>
+            <option value="admission">Admission no.</option>
+          </select>
+        </label>
         <SectionTitle>Classes &amp; streams</SectionTitle>
         <div className="grid gap-3 md:grid-cols-2">
           {grouped.map(([className, streams]) => (
@@ -241,63 +254,7 @@ export default function Classes() {
 
       {/* ── A4 portrait class list ─────────────────────────────────── */}
       {printClass ? (
-        <div className="print-only sheet sheet-classlist print-page p-0 text-[11px]">
-          <div className="mb-4 flex items-start justify-between border-b border-ink/20 pb-2">
-            <div>
-              <p className="text-[15px] font-semibold">{school.name}</p>
-              <p className="text-[9.5px] text-ink/60">
-                {school.address} · {school.postal} · {school.city}
-              </p>
-              <p className="text-[9.5px] text-ink/60">
-                {school.phone_number} · {school.contact_email}
-              </p>
-            </div>
-            <div className="text-right text-[9.5px] text-ink/60">
-              <p>Printed {formatDate(new Date().toISOString())}</p>
-              <p>{printRows.length} students</p>
-            </div>
-          </div>
-
-          <h2 className="text-center text-[13px] font-semibold uppercase tracking-[0.16em]">Class List</h2>
-          <p className="mb-3 text-center text-[10.5px] text-ink/60">
-            {printClass.class_name} {printClass.stream_name} · {printRows.length} students
-          </p>
-
-          <table className="w-full border-collapse text-[10px]">
-            <thead>
-              <tr>
-                {['#', 'Admission no.', 'Student name', 'Gender'].map((heading) => (
-                  <th key={heading} className="border border-ink/25 bg-ink/5 px-2 py-1 text-left font-semibold uppercase tracking-[0.08em]">
-                    {heading}
-                  </th>
-                ))}
-                {/* A blank column at the end: ruled space the class teacher can
-                    write in on the printed sheet. Deliberately empty, and wide
-                    enough (4.5cm) to hold a handwritten remark. */}
-                <th
-                  aria-label="Blank column"
-                  className="w-[4.5cm] min-w-[4.5cm] border border-ink/25 bg-ink/5 px-2 py-1"
-                />
-              </tr>
-            </thead>
-            <tbody>
-              {printRows.map((student, index) => (
-                <tr key={student._id}>
-                  <td className="border border-ink/15 px-2 py-1 tabular-nums">{index + 1}</td>
-                  <td className="border border-ink/15 px-2 py-1 font-mono">{student.admission_number}</td>
-                  <td className="border border-ink/15 px-2 py-1">{student.full_name}</td>
-                  <td className="border border-ink/15 px-2 py-1">{student.gender}</td>
-                  <td aria-hidden="true" className="w-[4.5cm] min-w-[4.5cm] border border-ink/15" />
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="mt-14 flex justify-between text-[9.5px] text-ink/70">
-            <div className="w-[46%] border-t border-ink/40 pt-1">Class teacher</div>
-            <div className="w-[46%] border-t border-ink/40 pt-1">Head teacher</div>
-          </div>
-        </div>
+        <ClassListPrint school={school} classLabel={`${printClass.class_name} ${printClass.stream_name}`} termLabel={printTerm ? `${printTerm.name} ${printTerm.academic_year}` : undefined} students={printRows} requestId={printTicket} onReady={()=>{window.print();if(printRequest?.printClassId)navigate(location.pathname,{replace:true,state:null})}} />
       ) : null}
 
       {db.classes.length === 0 ? (

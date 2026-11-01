@@ -66,7 +66,7 @@ export default function Timetable() {
   const db = useDb()
   const { session, teacher } = useSession()
   const isAdmin = session?.role === 'admin'
-  const school = db.schools[0]
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
   const [params] = useSearchParams()
 
   const requested = params.get('view')
@@ -1261,8 +1261,8 @@ export default function Timetable() {
                     return (
                       <td key={columnKey(column)} className={`px-1 py-1 ${clash ? 'bg-danger/5' : ''}`}>
                         {slot ? (
-                          <div className="flex h-full min-h-[22mm] flex-col justify-between gap-0.5">
-                            <p className="text-left text-[9px] font-bold uppercase leading-tight">
+                          <div className={`flex h-full min-h-[22mm] flex-col justify-between gap-0.5 ${mode === 'teacher' ? 'items-center text-center' : ''}`}>
+                            <p className={`font-bold uppercase leading-tight ${mode === 'teacher' ? 'text-[15px]' : 'text-left text-[9px]'}`}>
                               {mode === 'teacher'
                                 ? stream
                                   ? shortClass(stream.class_name, stream.stream_name)
@@ -1270,7 +1270,7 @@ export default function Timetable() {
                                 : (subject?.name ?? 'Lesson')}
                             </p>
                             <p className="text-center text-[7px] uppercase leading-tight text-ink/60">{slot.room || ''}</p>
-                            <p className="flex items-baseline justify-between gap-1 font-mono text-[6.5px] uppercase leading-tight text-ink/70">
+                            <p className={`flex items-baseline gap-1 font-mono text-[6.5px] uppercase leading-tight text-ink/70 ${mode === 'teacher' ? 'justify-center' : 'justify-between'}`}>
                               <span>{mode === 'teacher' ? shortCode(subject?.code ?? '') : (staff?.initials ?? '')}</span>
                               {clash ? <span className="font-sans font-bold text-danger">clash</span> : null}
                             </p>

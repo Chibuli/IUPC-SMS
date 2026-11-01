@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from 'react'
+import { useEffect, useRef, useState, type ComponentType } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChart3,
@@ -20,7 +20,6 @@ import {
 } from 'lucide-react'
 import { useDb } from './data/db'
 import { useSession } from './session'
-import { SchoolCrest } from './components/ui'
 import { SyncPill } from './components/SyncStatus'
 
 interface NavItem {
@@ -56,9 +55,9 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
 ]
 
 function roleBadge(role: string) {
-  if (role === 'admin') return 'border-brass/50 bg-brass/15 text-brass'
-  if (role === 'teacher') return 'border-white/20 bg-white/10 text-white/80'
-  return 'border-white/15 text-white/60'
+  if (role === 'admin') return 'border-white/40 bg-white/15 text-white'
+  if (role === 'teacher') return 'border-white/30 bg-white/10 text-white'
+  return 'border-white/30 text-white'
 }
 
 export default function AppLayout() {
@@ -67,8 +66,37 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [drawer, setDrawer] = useState(false)
-  const school = db.schools[0]
+  const drawerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLButtonElement>(null)
+  const desktopNavRef = useRef<HTMLElement>(null)
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
   const wide = location.pathname.startsWith('/dashboard/timetable')
+  useEffect(() => {
+    if (window.innerWidth >= 1024) desktopNavRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [location.pathname])
+  useEffect(() => {
+    if (!drawer) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    drawerRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const closeOnDesktop = () => { if (window.innerWidth >= 1024) setDrawer(false) }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setDrawer(false) }
+      if (event.key !== 'Tab') return
+      const controls = [...(drawerRef.current?.querySelectorAll<HTMLElement>('a[href],button:not(:disabled)') ?? [])]
+      const first = controls[0], last = controls.at(-1)
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', closeOnDesktop)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', closeOnDesktop)
+      menuRef.current?.focus()
+    }
+  }, [drawer])
 
   const groups = GROUPS.map((group) => ({
     ...group,
@@ -82,7 +110,7 @@ export default function AppLayout() {
 
   /** Vertical, grouped navigation for the mobile drawer. */
   const drawerNav = (
-    <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+    <nav aria-label="Primary mobile" className="workspace-drawer-nav min-h-0 flex-1 overflow-y-auto px-3 py-4">
       {groups.map((group) => (
         <div key={group.title} className="mb-4">
           <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
@@ -131,34 +159,42 @@ export default function AppLayout() {
   )
 
   return (
-    <div className="min-h-screen bg-paper print:min-h-0">
+    <div className="workspace-shell min-h-screen bg-paper print:min-h-0">
+      <a href="#workspace-main" className="workspace-skip-link">Skip to main content</a>
       {/* ── mobile bar ─────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-40 flex items-center justify-between gap-2 border-b border-rule bg-raised px-4 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] md:hidden no-print">
-        <button type="button" className="btn btn-sm" onClick={() => setDrawer(true)} aria-label="Open navigation">
+      <header className="workspace-mobile-header sticky top-0 z-40 no-print">
+        <div className="workspace-mobile-top">
+        <button ref={menuRef} type="button" className="workspace-header-button" onClick={() => setDrawer(true)} aria-label="Open navigation" aria-expanded={drawer} aria-controls="workspace-navigation">
           <Menu size={15} />
         </button>
         <div className="flex min-w-0 items-center gap-2">
-          <SchoolCrest school={school} size={24} />
-          <span className="truncate text-[13px] font-semibold">{school.name}</span>
+          <img className="workspace-logo" src={school.logo_url || '/iupc-wordmark.png'} alt={`${school.name} logo`} width="174" height="71" />
+          <div className="min-w-0"><p className="truncate text-[13px] font-semibold">{school.name}</p><p className="workspace-subtitle">Academic Workspace</p></div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <SyncPill surface="light" compact />
-          <button type="button" className="btn btn-sm" onClick={signOutNow} aria-label="Sign out">
+          <SyncPill surface="dark" compact />
+          <button type="button" className="workspace-header-button" onClick={signOutNow} aria-label="Sign out">
             <LogOut size={14} />
           </button>
         </div>
-      </div>
+        </div>
+        <div className="workspace-mobile-account">
+          <span className="truncate" title={session?.name}>{session?.name}</span>
+          <span className={`workspace-role ${roleBadge(session?.role ?? 'guest')}`}>{session?.role ?? 'guest'}</span>
+          {session?.role === 'admin' ? <Link className="workspace-register" to="/dashboard/teachers?register=1"><UserPlus size={14} aria-hidden="true" /> Register teacher</Link> : null}
+        </div>
+      </header>
 
       {/* ── desktop top bar ────────────────────────────────────────── */}
       {/* The menu sits above every page rather than beside it, so a page owns the
           full window width: the timetable needs that for forty period columns. */}
-      <header className="sticky top-0 z-40 hidden bg-ink text-white shadow-[0_1px_0_rgb(255_255_255/0.06),0_10px_24px_-16px_rgb(17_24_39/0.55)] md:block no-print">
-        <div className="mx-auto flex h-[56px] max-w-[1600px] items-center gap-4 px-6 xl:px-8">
+      <header className="workspace-header sticky top-0 z-40 text-white no-print">
+        <div className="workspace-header-top mx-auto flex max-w-[1600px] items-center gap-4 px-6 xl:px-8">
           <div className="flex min-w-0 items-center gap-2.5">
-            <SchoolCrest school={school} size={30} />
+            <img className="workspace-logo" src={school.logo_url || '/iupc-wordmark.png'} alt={`${school.name} logo`} width="174" height="71" />
             <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold leading-tight">{school.name}</p>
-              <p className="text-[9.5px] uppercase tracking-[0.16em] text-white/40">Academic workspace</p>
+              <p className="truncate text-[16px] font-semibold leading-tight">{school.name}</p>
+              <p className="workspace-subtitle">Academic Workspace</p>
             </div>
           </div>
 
@@ -168,14 +204,14 @@ export default function AppLayout() {
               <Link
                 to="/dashboard/teachers?register=1"
                 title="Register a teacher"
-                className="inline-flex items-center gap-1.5 rounded border border-white/20 bg-white/10 px-2 py-1 text-[11.5px] font-medium text-white/85 transition hover:bg-white/20 hover:text-white"
+                className="workspace-register"
               >
                 <UserPlus size={13} /> Register teacher
               </Link>
             ) : null}
-            <p className="max-w-[180px] truncate text-[12px] text-white/75">{session?.name}</p>
+            <p className="workspace-user" title={session?.name}>{session?.name}</p>
             <span
-              className={`rounded border px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.1em] ${roleBadge(session?.role ?? 'guest')}`}
+              className={`workspace-role ${roleBadge(session?.role ?? 'guest')}`}
             >
               {session?.role ?? 'guest'}
             </span>
@@ -183,7 +219,7 @@ export default function AppLayout() {
             <button
               type="button"
               onClick={signOutNow}
-              className="inline-flex items-center gap-1 text-[11.5px] text-white/55 transition hover:text-white"
+              className="workspace-header-button"
             >
               <LogOut size={12} /> Sign out
             </button>
@@ -192,11 +228,12 @@ export default function AppLayout() {
 
         <div className="border-t border-white/10">
           <nav
+            ref={desktopNavRef}
             aria-label="Primary"
-            className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-1 gap-y-0.5 px-4 py-1.5 xl:px-8"
+            className="workspace-nav mx-auto flex max-w-[1600px] items-center gap-x-1 px-4 py-1.5 xl:px-8"
           >
             {groups.map((group, index) => (
-              <div key={group.title} className="flex items-center">
+              <div key={group.title} className="flex shrink-0 items-center">
                 {index > 0 ? <span className="mx-2 h-4 w-px shrink-0 bg-white/15" aria-hidden="true" /> : null}
                 <ul className="flex items-center gap-0.5">
                   {group.items.map((item) => (
@@ -205,13 +242,9 @@ export default function AppLayout() {
                         to={item.to}
                         end={item.to === '/dashboard'}
                         title={`${group.title} · ${item.label}`}
-                        className={({ isActive }) =>
-                          `flex items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-[12.5px] transition ${
-                            isActive ? 'bg-crimson font-medium text-white' : 'text-white/65 hover:bg-white/10 hover:text-white'
-                          }`
-                        }
+                        className={({ isActive }) => `workspace-nav-link ${isActive ? 'is-active' : ''}`}
                       >
-                        <item.icon size={14} className="hidden xl:block" />
+                        <item.icon size={15} />
                         {item.label}
                       </NavLink>
                     </li>
@@ -224,18 +257,19 @@ export default function AppLayout() {
       </header>
 
       {drawer ? (
-        <div className="fixed inset-0 z-50 md:hidden no-print">
+        <div className="workspace-drawer fixed inset-0 z-50 no-print">
           <div className="absolute inset-0 bg-ink/50" onClick={() => setDrawer(false)} aria-hidden="true" />
-          <div className="absolute inset-y-0 left-0 flex w-[268px] flex-col bg-ink">
+          <div ref={drawerRef} id="workspace-navigation" role="dialog" aria-modal="true" aria-label="Workspace navigation" className="workspace-drawer-panel absolute inset-y-0 left-0 flex flex-col">
             <div className="flex items-center justify-between px-3 pt-3 pb-1">
               <div className="flex items-center gap-2 px-1">
-                <SchoolCrest school={school} size={26} />
+                <img className="workspace-logo" src={school.logo_url || '/iupc-wordmark.png'} alt={`${school.name} logo`} width="174" height="71" />
                 <span className="text-[13px] font-semibold text-white">{school.name}</span>
               </div>
-              <button type="button" className="text-white/60" onClick={() => setDrawer(false)} aria-label="Close navigation">
+              <button type="button" className="workspace-header-button" onClick={() => setDrawer(false)} aria-label="Close navigation">
                 <X size={18} />
               </button>
             </div>
+            {session?.role === 'admin' ? <Link to="/dashboard/teachers?register=1" onClick={() => setDrawer(false)} className="workspace-register mx-4 mt-3"><UserPlus size={14} /> Register teacher</Link> : null}
             {drawerNav}
             {drawerAccount}
           </div>
@@ -245,7 +279,9 @@ export default function AppLayout() {
       {/* The timetable is a week-wide wall chart: capping it at the reading
           column would force forty period columns back into a scroller. */}
       <main
-        className={`mx-auto px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 md:px-6 md:py-6 xl:px-8 print:max-w-none print:p-0 ${
+        id="workspace-main"
+        tabIndex={-1}
+        className={`workspace-content mx-auto px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 md:px-6 md:py-6 xl:px-8 print:max-w-none print:p-0 ${
           wide ? 'max-w-none 2xl:max-w-[1600px]' : 'max-w-6xl'
         }`}
       >

@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { KeyRound, PenLine, RotateCcw, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { api, useDb } from '../data/db'
 import { useSession } from '../session'
+import { supabaseConfigured } from '../data/supabase'
+import { StaffInvitation } from '../components/BackendSetup'
+import { inviteStaff, staffAccountStatuses } from '../data/backend'
+import { invitationMessage, registerTeacherWithInvitation, type StaffAccountStatus } from '../lib/teacher-onboarding'
 import { Avatar, Badge, EmptyState, Field, Modal, PageHeader, SectionTitle } from '../components/ui'
 import { AccessBadge, AccountBadge, PermissionSummary, PermissionToggles } from '../components/permissions'
 import { grantedPermissions, hasPermission, normalisePermissions } from '../lib/permissions'
@@ -49,6 +53,27 @@ export default function Teachers() {
   const [notice, setNotice] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null)
   const [removeFor, setRemoveFor] = useState<string | null>(null)
   const [resetFor, setResetFor] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const [accountStatuses, setAccountStatuses] = useState<Record<string, StaffAccountStatus>>({})
+  const [statusError, setStatusError] = useState('')
+  const statusGeneration = useRef(0)
+  const schoolId = session?.schoolId
+  const refreshAccountStatuses = useCallback(async () => {
+    const generation = ++statusGeneration.current
+    if (!supabaseConfigured || !isAdmin) return
+    try {
+      const statuses = await staffAccountStatuses()
+      if (generation === statusGeneration.current) { setAccountStatuses(statuses); setStatusError('') }
+    } catch {
+      if (generation === statusGeneration.current) { setAccountStatuses({}); setStatusError('Authoritative account status is unavailable. Check the staff invitation service; teacher registration is still available.') }
+    }
+  }, [isAdmin, schoolId])
+  useEffect(() => {
+    setAccountStatuses({}); setStatusError('')
+    void refreshAccountStatuses()
+    return () => { ++statusGeneration.current }
+  }, [refreshAccountStatuses])
 
   function openRegister() {
     setForm(blankForm(db.teachers))
@@ -79,7 +104,7 @@ export default function Teachers() {
   }
 
   const entering = db.teachers.filter((teacher) => hasPermission(teacher, 'marks.enter')).length
-  const awaiting = db.teachers.filter((teacher) => !teacher.password_hash).length
+  const awaiting = db.teachers.filter((teacher) => supabaseConfigured ? accountStatuses[teacher._id] !== 'email_verified' : !teacher.password_hash).length
 
   const offered = useMemo(() => offeredSubjects(db.subjects), [db.subjects])
 
@@ -110,10 +135,10 @@ export default function Teachers() {
             ? hasPermission(teacher, 'marks.enter')
             : access === 'readonly'
               ? !hasPermission(teacher, 'marks.enter')
-              : !teacher.password_hash,
+              : supabaseConfigured ? accountStatuses[teacher._id] !== 'email_verified' : !teacher.password_hash,
       )
       .sort((a, b) => a.full_name.localeCompare(b.full_name))
-  }, [db.teachers, query, access])
+  }, [db.teachers, query, access, accountStatuses])
 
   function toggleSubject(subjectId: string) {
     setForm((current) => ({
@@ -158,17 +183,27 @@ export default function Teachers() {
       permissions: normalisePermissions(form.permissions),
     }
 
+    if (savingRef.current) return
+    savingRef.current = true; setSaving(true)
+    try {
     if (editingId) {
       await api.teachers.update(editingId, payload)
       setNotice({ tone: 'ok', text: `${name} updated — ${form.subjectIds.length} subject${form.subjectIds.length === 1 ? '' : 's'} assigned.` })
     } else {
-      await api.teachers.create(payload)
+      const result = await registerTeacherWithInvitation(() => api.teachers.create(payload), supabaseConfigured ? inviteStaff : null)
+      if (supabaseConfigured) {
+        setAccountStatuses(current => ({ ...current, [result.teacher._id]: result.invitation?.status ?? 'requires_attention' }))
+      }
       setNotice({
-        tone: 'ok',
-        text: `${name} added to the staff register as a read-only account. They create their own password with ${email} on the sign-in page — grant mark entry in Settings → Teacher permissions.`,
+        tone: result.invitationError ? 'danger' : 'ok',
+        text: supabaseConfigured
+          ? `${name} was registered successfully. ${result.invitationError ? 'Invitation requires attention. The saved record is retained; use Check / send secure invitation on their card to retry after checking the service.' : result.invitation ? invitationMessage(result.invitation) : 'Invitation has not been started.'}`
+          : `${name} added to the staff register. Their permissions and subjects are saved.`,
       })
     }
     setEditor(null)
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'Teacher registration could not be completed.') }
+    finally { savingRef.current = false; setSaving(false) }
   }
 
   /**
@@ -209,7 +244,7 @@ export default function Teachers() {
             <span>{db.teachers.length} staff</span>
             <span>{entering} may enter marks</span>
             <span>{db.teachers.length - entering} read-only</span>
-            <span data-count="awaiting-signup">{awaiting} awaiting sign-up</span>
+            <span data-count="awaiting-signup">{awaiting} {supabaseConfigured ? 'need activation review' : 'awaiting sign-up'}</span>
           </>
         }
         actions={
@@ -227,6 +262,7 @@ export default function Teachers() {
         }
       />
 
+      {supabaseConfigured && isAdmin ? <div className="mb-3 text-xs text-ink/60"><button type="button" className="btn btn-sm" onClick={() => void refreshAccountStatuses()}>Refresh account status</button>{statusError ? <p role="status" className="mt-2">{statusError}</p> : null}</div> : null}
       {notice ? (
         <p
           role="status"
@@ -270,7 +306,7 @@ export default function Teachers() {
             <option value="all">All staff</option>
             <option value="entry">May enter marks</option>
             <option value="readonly">Read-only</option>
-            <option value="awaiting">Awaiting sign-up</option>
+            <option value="awaiting">{supabaseConfigured ? 'Needs activation review' : 'Awaiting sign-up'}</option>
           </select>
         </label>
       </div>
@@ -311,12 +347,13 @@ export default function Teachers() {
                 </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <AccountBadge teacher={teacher} />
-                  <span className="text-[10.5px] text-ink/45" data-account={teacher.password_hash ? 'active' : 'awaiting'}>
-                    {teacher.password_hash
+                  <AccountBadge teacher={teacher} status={accountStatuses[teacher._id]} />
+                  <span className="text-[10.5px] text-ink/45" data-account={supabaseConfigured ? accountStatuses[teacher._id] ?? 'unknown' : teacher.password_hash ? 'active' : 'awaiting'}>
+                    {supabaseConfigured ? accountStatuses[teacher._id] === 'email_verified' ? 'Auth confirms email verification and a sign-in. Password setup completion is not confirmed by this status.' : 'Only a secure email link allows password setup; the register alone does not activate an account.' : teacher.password_hash
                       ? `Chose their password ${teacher.activated_at ? formatDateTime(teacher.activated_at) : ''}`.trim()
                       : 'Recorded, but has never signed in — they create their own password.'}
                   </span>
+                  {supabaseConfigured && isAdmin ? <StaffInvitation email={teacher.email} teacherId={teacher._id} disabled={saving} onDone={result => { setNotice({tone:'ok',text:invitationMessage(result)}); void refreshAccountStatuses() }}/> : null}
                 </div>
 
                 <div className="mt-3">
@@ -345,10 +382,11 @@ export default function Teachers() {
 
                 {isAdmin ? (
                   <div className="mt-3 flex flex-wrap gap-1.5">
+                    {supabaseConfigured ? <p className="w-full text-xs text-ink/55">For an existing account, ask the teacher to use Forgot password on the sign-in page. This never clears their password or changes permissions.</p> : null}
                     <button type="button" className="btn btn-sm" data-action="manage-teacher" onClick={() => openEdit(teacher)}>
                       <PenLine size={13} /> Manage
                     </button>
-                    {teacher.password_hash ? (
+                    {!supabaseConfigured && teacher.password_hash ? (
                       <button
                         type="button"
                         className="btn btn-sm"
@@ -404,10 +442,7 @@ export default function Teachers() {
           <p className="mt-2 flex items-start gap-2">
             <KeyRound size={14} className="mt-0.5 shrink-0 text-ink/35" />
             <span>
-              Sign-in is invitation-only. Recording a teacher here puts their email on the register and nothing more —
-              they choose their own password at the sign-in page with that address, and until they do the account
-              cannot be entered at all. Reset sign-in clears the stored password if one is forgotten, and the teacher
-              chooses a new one the same way.
+              {supabaseConfigured ? 'Registration saves the teacher and starts a secure email invitation. The teacher opens that email to verify ownership and choose a password. Failed invitations leave the staff record intact for review and retry. Existing accounts use Forgot password; subjects and permissions are preserved.' : 'Recording a teacher saves their staff details, subjects and permissions. Account access is managed separately.'}
             </span>
           </p>
         </div>
@@ -423,8 +458,8 @@ export default function Teachers() {
             <button type="button" className="btn btn-sm" onClick={() => setEditor(null)}>
               Cancel
             </button>
-            <button type="button" className="btn btn-primary btn-sm" data-action="save-teacher" onClick={() => void save()}>
-              {editor?.mode === 'edit' ? 'Save changes' : 'Register teacher'}
+            <button type="button" className="btn btn-primary btn-sm" data-action="save-teacher" disabled={saving} onClick={() => void save()}>
+              {saving ? 'Saving and checking invitation…' : editor?.mode === 'edit' ? 'Save changes' : 'Register teacher'}
             </button>
           </>
         }
@@ -451,7 +486,7 @@ export default function Teachers() {
             </Field>
           </div>
 
-          <Field label="Staff email" hint="They create their own password with this address at the sign-in page.">
+          <Field label="Staff email" hint="A secure invitation to this official address lets the teacher verify ownership and choose their own password.">
             <input
               className="input-field"
               data-field="teacher-email"

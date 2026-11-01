@@ -16,6 +16,8 @@ export interface School {
   /** Square emblem used where the lockup would render too small to read. */
   crest_url?: string | null
   motto: string
+  /** Current authorised signatory used by printed report cards. */
+  principal_name?: string
 }
 
 export interface ClassRow {
@@ -23,6 +25,8 @@ export interface ClassRow {
   school_id: ID
   class_name: string
   stream_name: string
+  /** Registered teacher assigned to sign report cards for this class. */
+  class_teacher_id?: ID | null
 }
 
 /**
@@ -46,14 +50,14 @@ export interface Teacher {
   permissions: TeacherPermissionKey[]
   initials: string
   /**
-   * The teacher's own sign-in credential, absent until they complete sign-up.
+   * Legacy local-only sign-in credential; hosted Auth never exposes passwords.
    * The register alone does not let anyone in: the registrar records the person,
    * the person chooses the password. `password_hash` is null while the account
    * is waiting for that first sign-up.
    */
   password_salt?: string | null
   password_hash?: string | null
-  /** When the teacher set their password. Null = awaiting sign-up. */
+  /** Legacy local-only password setup timestamp; hosted activation is not inferred here. */
   activated_at?: string | null
 }
 
@@ -89,11 +93,18 @@ export interface Student {
   gender: 'Male' | 'Female'
   date_of_birth: string
   class_id: ID
-  /** Subjects this learner is enrolled in; absent on legacy records means class-wide curriculum. */
+  /** Subjects in the authoritative enrollment relation, when known. */
   subject_ids?: ID[]
+  /** Explicit server verification state; absent on local/demo data is unverified. */
+  enrollment_certainty?: 'verified_enrolled' | 'verified_no_enrollments' | 'unknown' | 'error'
+  /** Term for which this enrollment scope was verified; null means no term was verified. */
+  enrollment_term_id?: ID | null
   guardian_name: string
   guardian_phone: string
   status: 'Active' | 'Alumni'
+  /** Separate lifecycle flag; never inferred from Alumni status. */
+  archived: boolean
+  archived_at: string | null
 }
 
 export interface Term {

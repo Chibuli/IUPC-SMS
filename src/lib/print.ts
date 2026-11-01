@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-export type PrintPage = 'timetable' | 'master' | 'broadsheet' | 'report' | 'classlist' | 'analysis' | 'deck' | 'analysis'
+export type PrintPage = 'timetable' | 'master' | 'broadsheet' | 'broadsheet-wide' | 'report' | 'classlist' | 'analysis' | 'deck' | 'analysis'
 
 /**
  * Named CSS pages isolate each printed artefact (A4 landscape timetable vs A4

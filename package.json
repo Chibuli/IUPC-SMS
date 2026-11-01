@@ -11,13 +11,17 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test:backend": "vitest run src/data/backend.test.ts",
+    "test:focused": "vitest run src/data/backend.test.ts src/data/load-marks.test.ts src/data/student-lifecycle.test.ts src/lib/offline-outcomes.test.ts src/lib/enrollment-certainty.test.ts src/lib/analytics.test.ts src/lib/production-config.test.ts src/lib/teacher-onboarding.test.ts supabase/functions/provision-staff/handler.test.ts",
     "preview": "vite preview",
     "verify:print": "node scripts/verify.mjs",
     "verify:e2e": "node scripts/e2e.mjs",
     "verify:layout": "node scripts/layout.mjs",
-    "verify:smoke": "node scripts/smoke.mjs",
+    "verify:dashboard": "node scripts/verify-dashboard.mjs",
     "verify:migration": "node scripts/migration-check.mjs",
     "verify:offline": "node scripts/verify-offline.mjs",
+    "verify:auth": "node scripts/verify-auth.mjs",
+    "verify:production": "node scripts/verify-production.mjs",
     "verify:signup": "node scripts/verify-signup.mjs",
     "icons": "node scripts/make-icons.mjs",
     "toolchain": "bash scripts/android-toolchain.sh",
@@ -26,6 +30,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^7.6.9",
+    "@supabase/supabase-js": "^2.118.0",
     "lucide-react": "^0.545.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -34,15 +39,18 @@
   "devDependencies": {
     "@capacitor/android": "^7.6.9",
     "@capacitor/cli": "^7.6.9",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.0.4",
     "pdf-lib": "^1.17.1",
     "puppeteer-core": "^25.15.0",
+    "supabase": "^2.122.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^8.3.5",
-    "vite-plugin-pwa": "^2.0.0"
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "5.0.5"
   }
 }

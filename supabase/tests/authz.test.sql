@@ -1,0 +1,15 @@
+begin;
+select plan(11);
+select ok(not has_table_privilege('anon','public.students','select'),'anonymous users have no student select grant');
+select ok(not has_table_privilege('anon','public.marks','insert'),'anonymous users have no mark insert grant');
+select ok(not has_table_privilege('authenticated','public.profiles','update'),'users cannot alter profile authorization state');
+select ok(not has_function_privilege('authenticated','public.provision_initial_admin(uuid,text,text)','execute'),'users cannot create their own first admin role');
+select ok(not has_function_privilege('anon','public.apply_offline_write(uuid,text,jsonb)','execute'),'anonymous sync is forbidden');
+select ok(has_function_privilege('authenticated','public.apply_offline_write(uuid,text,jsonb)','execute'),'authenticated sync RPC is available for server validation');
+select ok(not has_function_privilege('authenticated','public.protect_membership()','execute'),'membership trigger function is not directly callable');
+select ok(not has_function_privilege('authenticated','public.guard_note_write()','execute'),'note trigger function is not directly callable');
+select ok(not has_function_privilege('authenticated','public.enforce_mark_write()','execute'),'mark trigger function is not directly callable');
+select ok(not has_function_privilege('anon','public.set_subject_offered(uuid,uuid,boolean)','execute'),'anonymous users cannot change offered curriculum');
+select ok(has_function_privilege('authenticated','public.set_subject_offered(uuid,uuid,boolean)','execute'),'authenticated subject changes go through admin-checking RPC');
+select * from finish();
+rollback;

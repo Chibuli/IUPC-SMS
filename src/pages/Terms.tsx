@@ -40,7 +40,13 @@ export default function Terms() {
         }
       />
 
-      <div className="grid gap-3 md:grid-cols-2">
+      {db.terms.length === 0 ? (
+        <div className="card border-dashed px-4 py-8 text-center">
+          <p className="text-[13px] font-medium text-ink/75">No academic terms configured</p>
+          <p className="mt-1 text-[12px] text-ink/50">Create the first term to begin setting up the school calendar.</p>
+          {isAdmin ? <button type="button" className="btn btn-primary btn-sm mt-3" onClick={() => setOpen(true)}><Plus size={13} /> Add term</button> : null}
+        </div>
+      ) : <div className="grid gap-3 md:grid-cols-2">
         {[...db.terms]
           .sort((a, b) => b.academic_year.localeCompare(a.academic_year) || b.name.localeCompare(a.name))
           .map((term) => {
@@ -90,7 +96,7 @@ export default function Terms() {
               </div>
             )
           })}
-      </div>
+      </div>}
 
       <section className="mt-6">
         <SectionTitle>How activation works</SectionTitle>

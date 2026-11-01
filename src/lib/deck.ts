@@ -1,4 +1,5 @@
 import type { Database, Exam, GradeBand, Mark, Student, Term } from '../data/types'
+import { isOperationalStudent } from '../data/student-lifecycle'
 import { mean } from './analytics'
 import { classLabel, orderedTerms, termLabel } from './analysis'
 import { round } from './format'
@@ -158,8 +159,10 @@ export function buildDeck({
     (!allowedSubjectIds || allowedSubjectIds.includes(exam.subject_id))
 
   const scoped = db.exams.filter((exam) => inSubjectScope(exam) && (classId === 'all' || exam.class_id === classId))
+  const operationalStudentIds = new Set(db.students.filter(isOperationalStudent).map((student) => student._id))
   const marksByExam = new Map<string, Mark[]>()
   for (const mark of db.marks) {
+    if (!operationalStudentIds.has(mark.student_id)) continue
     const list = marksByExam.get(mark.exam_id) ?? []
     list.push(mark)
     marksByExam.set(mark.exam_id, list)
@@ -197,7 +200,7 @@ export function buildDeck({
     .filter((cls): cls is NonNullable<typeof cls> => Boolean(cls))
     .sort((a, b) => a.class_name.localeCompare(b.class_name, undefined, { numeric: true }) || a.stream_name.localeCompare(b.stream_name))
 
-  const rosterOf = (id: string): Student[] => db.students.filter((student) => student.class_id === id && student.status === 'Active')
+  const rosterOf = (id: string): Student[] => db.students.filter((student) => student.class_id === id && isOperationalStudent(student))
 
   const streams: DeckStream[] = classRows.map((cls) => {
     const examsForStream = (termId?: string) =>

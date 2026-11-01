@@ -1,4 +1,5 @@
 import type { Database, Exam, GradeBand, Mark, Student, Term } from '../data/types'
+import { isOperationalStudent } from '../data/student-lifecycle'
 import { bandFor } from './grading'
 import { mean } from './analytics'
 import { round } from './format'
@@ -120,7 +121,7 @@ function examsIn(
 
 function activeRoster(db: Database, classIds: string[]): Student[] {
   const scope = new Set(classIds)
-  return db.students.filter((student) => student.status === 'Active' && scope.has(student.class_id))
+  return db.students.filter((student) => isOperationalStudent(student) && scope.has(student.class_id))
 }
 
 interface StudentScore {
@@ -152,6 +153,7 @@ function studentScores(db: Database, exams: Exam[], roster: Student[]): StudentS
 
 function completionOf(db: Database, exams: Exam[], roster: Student[]) {
   const rosterByClass = new Map<string, number>()
+  const rosterIds = new Set(roster.map((student) => student._id))
   for (const student of roster) {
     rosterByClass.set(student.class_id, (rosterByClass.get(student.class_id) ?? 0) + 1)
   }
@@ -161,7 +163,7 @@ function completionOf(db: Database, exams: Exam[], roster: Student[]) {
   let completePapers = 0
   for (const exam of exams) {
     const seats = rosterByClass.get(exam.class_id) ?? 0
-    const marked = db.marks.filter((mark) => mark.exam_id === exam._id && mark.score !== null).length
+    const marked = db.marks.filter((mark) => mark.exam_id === exam._id && rosterIds.has(mark.student_id) && mark.score !== null).length
     expected += seats
     entered += Math.min(marked, seats)
     if (seats > 0 && marked >= seats) completePapers += 1
@@ -176,7 +178,7 @@ function completionOf(db: Database, exams: Exam[], roster: Student[]) {
   }
 }
 
-function subjectPerformance(db: Database, current: Exam[], previous: Exam[]): SubjectPerformance[] {
+function subjectPerformance(db: Database, current: Exam[], previous: Exam[], activeStudentIds: Set<string>): SubjectPerformance[] {
   const groups = new Map<string, Exam[]>()
   for (const exam of current) {
     const list = groups.get(exam.subject_id) ?? []
@@ -197,11 +199,11 @@ function subjectPerformance(db: Database, current: Exam[], previous: Exam[]): Su
     const values: number[] = []
     for (const exam of exams) {
       for (const mark of db.marks) {
-        if (mark.exam_id === exam._id && numeric(mark.score)) values.push((mark.score / exam.max_score) * 100)
+        if (mark.exam_id === exam._id && activeStudentIds.has(mark.student_id) && numeric(mark.score)) values.push((mark.score / exam.max_score) * 100)
       }
     }
     const average = mean(values)
-    const prior = percentagesFor(db, previousBySubject.get(subjectId) ?? [])
+    const prior = percentagesFor(db, previousBySubject.get(subjectId) ?? [], activeStudentIds)
     const priorAverage = mean(prior)
 
     rows.push({
@@ -227,12 +229,12 @@ function subjectPerformance(db: Database, current: Exam[], previous: Exam[]): Su
   })
 }
 
-function percentagesFor(db: Database, exams: Exam[]): number[] {
+function percentagesFor(db: Database, exams: Exam[], activeStudentIds: Set<string>): number[] {
   const examById = new Map(exams.map((exam) => [exam._id, exam]))
   const values: number[] = []
   for (const mark of db.marks) {
     const exam = examById.get(mark.exam_id)
-    if (!exam || !numeric(mark.score)) continue
+    if (!exam || !activeStudentIds.has(mark.student_id) || !numeric(mark.score)) continue
     values.push((mark.score / exam.max_score) * 100)
   }
   return values
@@ -392,7 +394,8 @@ export function buildAnalysis({
   const average = mean(scores.map((score) => score.average))
   const completion = completionOf(db, exams, roster)
 
-  const subjectRows = subjectPerformance(db, exams, previousExams)
+  const activeStudentIds = new Set(db.students.filter(isOperationalStudent).map((student) => student._id))
+  const subjectRows = subjectPerformance(db, exams, previousExams, activeStudentIds)
   const subjectDeltas = subjectRows
     .map((subject) => subject.delta)
     .filter((delta): delta is number => delta !== null)

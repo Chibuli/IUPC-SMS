@@ -17,7 +17,7 @@ export function PageHeader({
   actions?: ReactNode
 }) {
   return (
-    <header className="mb-5 border-b border-rule pb-4 no-print">
+    <header className="workspace-page-heading mb-5 border-b border-rule pb-4 no-print">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-[22px] font-semibold tracking-tight text-ink">{title}</h1>
@@ -104,6 +104,17 @@ export function SchoolLogo({
   size?: number
   plate?: boolean
 }) {
+  if (!school) {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center justify-center rounded border border-rule bg-sunken font-semibold tracking-tight text-ink/50"
+        style={{ width: size, height: size }}
+        aria-label="IUPC Academy"
+      >
+        IUPC
+      </span>
+    )
+  }
   if (school.logo_url) {
     return (
       <img
@@ -127,6 +138,13 @@ export function SchoolLogo({
 
 /** Square emblem for tight spaces (top bar, mobile bar, table headers). */
 export function SchoolCrest({ school, size = 30 }: { school: School; size?: number }) {
+  if (!school) {
+    return (
+      <span className="inline-flex shrink-0 items-center justify-center rounded border border-rule bg-sunken text-[9px] font-semibold text-ink/50" style={{ width: size, height: size }} aria-label="IUPC Academy">
+        IUPC
+      </span>
+    )
+  }
   const source = school.crest_url ?? school.logo_url
   if (source) {
     return (

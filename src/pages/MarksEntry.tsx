@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { AlertTriangle, Check, Lock, Printer, X } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, Lock, Printer, X } from 'lucide-react'
 import { api, findPaper, useDb } from '../data/db'
+import { useQueueRecords, type SubmitOutcome } from '../lib/offline'
 import { useSession } from '../session'
 import { Badge, EmptyState, GradePill, PageHeader } from '../components/ui'
 import { displayScore, gradeForMark, parseScoreInput, percentOf, resolveScale } from '../lib/grading'
 import { formatDate, formatDateTime, todayIso } from '../lib/format'
 import { usePrintPage } from '../lib/print'
 import type { Database, ID, Student } from '../data/types'
+import { isOperationalStudent } from '../data/student-lifecycle'
 
 /** The five papers this campus sets, in the order a term runs them. */
 const EXAM_TYPES = ['CAT 1', 'CAT 2', 'Midterm', 'Endterm', 'Pre-Mock'] as const
 
 type SortKey = 'adm' | 'name' | 'gender'
-type Flash = 'saved' | 'error'
+type Flash = 'saved' | 'queued' | 'review' | 'error'
 
 /** What the teacher picks on the bar: the four choices that name one paper. */
 interface Selection {
@@ -27,6 +29,30 @@ interface Selection {
  * The bar's starting position: the paper named in the URL when the page was
  * opened from a link, otherwise the active term and the first choices on offer.
  */
+function verifiedEnrolledIn(student: Student, termId: string, subjectId: string): boolean {
+  const subjectIds = student.subject_ids
+  if (
+    student.enrollment_certainty !== 'verified_enrolled' ||
+    student.enrollment_term_id !== termId ||
+    !Array.isArray(subjectIds) ||
+    subjectIds.length === 0 ||
+    subjectIds.some((id) => typeof id !== 'string' || id.trim().length === 0) ||
+    new Set(subjectIds).size !== subjectIds.length
+  ) return false
+  return subjectIds.includes(subjectId)
+}
+
+function enrollmentLabel(student: Student, termId: string, subjectId: string): string {
+  if (student.enrollment_term_id !== termId) return 'Enrollment scope not verified for this term'
+  if (student.enrollment_certainty === 'error') return 'Enrollment verification failed'
+  if (student.enrollment_certainty === 'unknown') return 'Enrollment scope unavailable'
+  if (student.enrollment_certainty === 'verified_no_enrollments') return 'No enrolled subjects'
+  if (student.enrollment_certainty === 'verified_enrolled') {
+    return verifiedEnrolledIn(student, termId, subjectId) ? 'Enrolled · editable' : 'Not enrolled in this subject'
+  }
+  return 'Enrollment scope unavailable'
+}
+
 function initialSelection(db: Database, examId: string | undefined, fallback: Selection): Selection {
   const exam = examId ? db.exams.find((entry) => entry._id === examId) : undefined
   if (!exam) return fallback
@@ -109,7 +135,7 @@ export default function MarksEntry() {
   const subject = db.subjects.find((entry) => entry._id === picked.subject_id)
   const cls = db.classes.find((entry) => entry._id === picked.class_id)
   const term = db.terms.find((entry) => entry._id === picked.term_id)
-  const school = db.schools[0]
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
 
   // What the paper is out of: what the teacher typed, else the recorded total.
   const typedTotal = Number(outOf)
@@ -124,10 +150,7 @@ export default function MarksEntry() {
 
   const roster = useMemo(() => {
     const rows = db.students.filter(
-      (student) =>
-        student.class_id === picked.class_id &&
-        student.status === 'Active' &&
-        (!student.subject_ids || student.subject_ids.includes(picked.subject_id)),
+      (student) => student.class_id === picked.class_id && isOperationalStudent(student),
     )
     const byAdmission = (a: Student, b: Student) => a.admission_number.localeCompare(b.admission_number)
     if (sortKey === 'name') {
@@ -137,7 +160,7 @@ export default function MarksEntry() {
       return [...rows].sort((a, b) => a.gender.localeCompare(b.gender) || a.full_name.localeCompare(b.full_name))
     }
     return [...rows].sort(byAdmission)
-  }, [db.students, picked.class_id, picked.subject_id, sortKey])
+  }, [db.students, picked.class_id, sortKey])
 
   const markFor = (studentId: string) =>
     paper ? db.marks.find((mark) => mark.exam_id === paper._id && mark.student_id === studentId) : undefined
@@ -155,16 +178,35 @@ export default function MarksEntry() {
   const [flash, setFlash] = useState<Record<string, Flash>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const inputs = useRef<Record<string, HTMLInputElement | null>>({})
+  const queued = useQueueRecords().filter(entry => !entry.locked && entry.payload.examId === paper?._id)
+  const queueKey = JSON.stringify(queued.map(entry => [entry.id, entry.state, entry.payload, entry.last_error]))
+  const previousSelection = useRef<string | null>(null)
 
   // Changing the paper clears the register: drafts belong to one sheet.
   useEffect(() => {
-    setDrafts(initialDrafts())
-    setFlash({})
-    setErrors({})
+    const restored = initialDrafts()
+    const statuses: Record<string, Flash> = {}
+    const reasons: Record<string, string> = {}
+    for (const entry of queued) {
+      const studentId = entry.payload.studentId
+      if (!roster.some(student => student._id === studentId)) continue
+      restored[studentId] = entry.payload.score === null ? '' : String(entry.payload.score)
+      statuses[studentId] = entry.state === 'Accepted' ? 'saved' : entry.state === 'Rejected' ? 'error' : entry.state === 'Blocked' ? 'review' : 'queued'
+      if (entry.last_error && (entry.state === 'Rejected' || entry.state === 'Blocked')) reasons[studentId] = entry.last_error
+    }
+    const changedPaper = previousSelection.current !== selectionKey
+    previousSelection.current = selectionKey
+    // Queue transitions must not discard another learner's unfinished input.
+    const queuedDrafts = Object.fromEntries(queued.map(entry => [entry.payload.studentId, entry.payload.score === null ? '' : String(entry.payload.score)]))
+    setDrafts(current => changedPaper ? restored : { ...current, ...queuedDrafts })
+    setFlash(statuses)
+    setErrors(reasons)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectionKey])
+  }, [selectionKey, queueKey])
 
-  const entered = roster.filter((student) => {
+  const eligibleRoster = roster.filter((student) => verifiedEnrolledIn(student, picked.term_id, picked.subject_id))
+  const blockedEnrollmentCount = roster.length - eligibleRoster.length
+  const entered = eligibleRoster.filter((student) => {
     const mark = markFor(student._id)
     return mark && mark.score !== null
   }).length
@@ -210,7 +252,15 @@ export default function MarksEntry() {
       })
       return true
     }
-    await api.marks.setScore(await paperId(), studentId, parsed.value)
+    if (session?.role === 'admin' && typeof navigator !== 'undefined' && !navigator.onLine) {
+      // Administrator mark capture is online only, so it is refused rather than queued.
+      setErrors((current) => ({ ...current, [studentId]: 'Administrators can only record marks while connected.' }))
+      setFlash((current) => ({ ...current, [studentId]: 'error' }))
+      return false
+    }
+    const outcome = await api.marks.setScore(await paperId(), studentId, parsed.value, teacher?._id ?? null)
+    if (!reportOutcome(studentId, outcome)) return false
+    if (outcome.state !== 'Accepted') return true
     if (parsed.value === null) {
       // Cleared on purpose: the row goes back to Pending rather than "Saved".
       setFlash((current) => {
@@ -268,71 +318,64 @@ export default function MarksEntry() {
   }
 
   /** Learners with no recorded outcome yet — the ones the warning names. */
-  const missing = roster.filter((student) => {
+  const missing = eligibleRoster.filter((student) => {
     const mark = markFor(student._id)
     return !mark || mark.score === null
   })
 
+  const [settling, setSettling] = useState(false)
+
   /**
-   * The blanks still open on one paper, read from storage rather than from the
-   * bar, so it stays right for a paper the teacher has already switched away
-   * from: the settle handler belongs to the sheet it was armed on.
+   * What the queue actually did, in the one place the row's status is decided.
+   * Only an accepted write may read as saved; a mark sitting on this device says
+   * so; a refusal carries its reason.
    */
-  const blanksFor = (examId: string): string[] => {
-    const row = db.exams.find((entry) => entry._id === examId)
-    if (!row) return []
-    return db.students
-      .filter(
-        (student) =>
-          student.class_id === row.class_id &&
-          student.status === 'Active' &&
-          (!student.subject_ids || student.subject_ids.includes(row.subject_id)),
-      )
-      .filter((student) => {
-        const mark = db.marks.find((entry) => entry.exam_id === examId && entry.student_id === student._id)
-        return !mark || mark.score === null
-      })
-      .map((student) => student._id)
+  function reportOutcome(studentId: string, outcome: SubmitOutcome): boolean {
+    if (!outcome.persisted) {
+      setErrors((current) => ({ ...current, [studentId]: outcome.detail }))
+      setFlash((current) => ({ ...current, [studentId]: 'error' }))
+      return false
+    }
+    if (outcome.state === 'Accepted') {
+      setFlash((current) => ({ ...current, [studentId]: 'saved' }))
+      return true
+    }
+    if (outcome.state === 'Rejected') {
+      setErrors((current) => ({ ...current, [studentId]: outcome.detail }))
+      setFlash((current) => ({ ...current, [studentId]: 'error' }))
+      return false
+    }
+    if (outcome.state === 'Blocked') {
+      setErrors((current) => ({ ...current, [studentId]: outcome.detail }))
+      setFlash((current) => ({ ...current, [studentId]: 'review' }))
+      return false
+    }
+    // Pending, Synchronizing, Retryable or Uncertain: on this device only.
+    setFlash((current) => ({ ...current, [studentId]: 'queued' }))
+    return true
   }
 
-  // Leaving the sheet settles the register: anything still blank becomes X
-  // (missing marks), which is what the printed codes already mean. A paper that
-  // was never recorded is untouched — browsing the bar creates nothing. The ref
-  // carries the current reader into the unload and unmount handlers.
-  const blanksRef = useRef(blanksFor)
-  blanksRef.current = blanksFor
-
-  const settleOnLeave = Boolean(paper) && !locked
-
-  useEffect(() => {
-    if (!settleOnLeave || !paper) return
-    const examId = paper._id
-    let armed = false
-    // StrictMode mounts, unmounts and mounts again in development; arming after
-    // a tick keeps that first synthetic teardown from writing anything.
-    const arm = window.setTimeout(() => {
-      armed = true
-    }, 250)
-    const settle = () => {
-      for (const studentId of blanksRef.current(examId)) void api.marks.setScore(examId, studentId, 'X')
+  /**
+   * Recording the missing learners as X is now something the teacher asks for.
+   * It used to happen silently on unload, where the writes were fire-and-forget
+   * and nobody could tell whether they had reached the server.
+   */
+  async function settleMissing() {
+    if (!paper || locked || settling || !missing.length) return
+    if (session?.role === 'admin' && typeof navigator !== 'undefined' && !navigator.onLine) {
+      setErrors((current) => ({ ...current, [missing[0]._id]: 'Administrators can only record marks while connected.' }))
+      return
     }
-    const warn = (event: BeforeUnloadEvent) => {
-      if (!blanksRef.current(examId).length) return
-      event.preventDefault()
-      event.returnValue = ''
+    setSettling(true)
+    try {
+      for (const learner of missing) {
+        const outcome = await api.marks.setScore(paper._id, learner._id, 'X', teacher?._id ?? null)
+        reportOutcome(learner._id, outcome)
+      }
+    } finally {
+      setSettling(false)
     }
-    const onHide = () => {
-      if (armed) settle()
-    }
-    window.addEventListener('beforeunload', warn)
-    window.addEventListener('pagehide', onHide)
-    return () => {
-      window.clearTimeout(arm)
-      window.removeEventListener('beforeunload', warn)
-      window.removeEventListener('pagehide', onHide)
-      if (armed) settle()
-    }
-  }, [paper?._id, settleOnLeave, locked])
+  }
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -382,6 +425,17 @@ export default function MarksEntry() {
         }
         actions={
           <>
+            {!locked && paper && missing.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={settling}
+                onClick={() => void settleMissing()}
+                data-action="settle-missing"
+              >
+                {settling ? <Loader2 size={13} className="animate-spin" /> : null} Record {missing.length} as X
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-sm"
@@ -563,6 +617,12 @@ export default function MarksEntry() {
       ) : null}
 
       {/* ── who is still missing a result, before the register ────────── */}
+      {blockedEnrollmentCount > 0 ? (
+        <div role="status" className="mb-3 rounded border border-warn/40 bg-warn/8 px-3 py-2.5 text-[12px] text-ink/75">
+          {blockedEnrollmentCount} student{blockedEnrollmentCount === 1 ? '' : 's'} are read-only because enrollment is unverified, empty, or does not include this subject for the selected term. Their enrollment status is shown in the register.
+        </div>
+      ) : null}
+
       {missing.length ? (
         <div
           role="alert"
@@ -581,8 +641,8 @@ export default function MarksEntry() {
             {locked
               ? ' This paper is read-only, so the blanks stay blank.'
               : paper
-                ? ' If you leave this page they are recorded as X (missing marks).'
-                : ' Nothing is saved until you key a result in, and once you do, leaving records the blanks as X.'}
+                ? ' They stay blank until you record them as X (missing marks) — nothing is filled in behind you.'
+                : ' Nothing is saved until you key a result in; no rows are created for a paper nobody has entered.'}
           </p>
         </div>
       ) : null}
@@ -605,13 +665,15 @@ export default function MarksEntry() {
               {roster.map((student, index) => {
                 const state = flash[student._id]
                 const error = errors[student._id]
+                const enrolledForPaper = verifiedEnrolledIn(student, picked.term_id, picked.subject_id)
+                const enrollmentStatus = enrollmentLabel(student, picked.term_id, picked.subject_id)
                 return (
                   <tr key={student._id}>
                     <td className="figure text-[11px] text-ink/40">{index + 1}</td>
                     <td className="figure text-[11.5px] text-ink/60">{student.admission_number}</td>
                     <td>
                       <p className="text-[13px] font-medium">{student.full_name}</p>
-                      <p className="text-[10.5px] text-ink/40">{student.gender}</p>
+                      <p className="text-[10.5px] text-ink/40">{student.gender} · {enrollmentStatus}</p>
                     </td>
                     <td className="text-right">
                       <input
@@ -622,7 +684,7 @@ export default function MarksEntry() {
                           error ? 'border-danger focus:border-danger focus:ring-danger/15' : ''
                         }`}
                         value={drafts[student._id] ?? ''}
-                        disabled={locked}
+                        disabled={locked || !enrolledForPaper}
                         inputMode="text"
                         aria-label={`Score for ${student.full_name}`}
                         placeholder="—"
@@ -660,8 +722,14 @@ export default function MarksEntry() {
                         <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-ok">
                           <Check size={11} /> Saved
                         </span>
+                      ) : state === 'queued' ? (
+                        <span className="text-[10.5px] font-medium text-warn">On this device</span>
+                      ) : state === 'review' ? (
+                        <span className="text-[10.5px] font-medium text-danger">Needs review</span>
                       ) : state === 'error' ? (
                         <span className="text-[10.5px] font-medium text-danger">Rejected</span>
+                      ) : !enrolledForPaper ? (
+                        <span className="text-[10.5px] font-medium text-warn">{enrollmentStatus}</span>
                       ) : markFor(student._id)?.score != null ? (
                         <span className="text-[10.5px] text-ink/45">Entered</span>
                       ) : (
@@ -714,7 +782,7 @@ export default function MarksEntry() {
         <table className="w-full border-collapse text-[10px]">
           <thead>
             <tr>
-              {['#', 'Admission no.', 'Student name', 'Score', '%', 'Grade'].map((heading) => (
+              {['#', 'Admission no.', 'Student name', 'Enrollment status', 'Score', '%', 'Grade'].map((heading) => (
                 <th
                   key={heading}
                   className="border border-ink/25 bg-ink/5 px-2 py-1 text-left font-semibold uppercase tracking-[0.08em]"
@@ -734,6 +802,7 @@ export default function MarksEntry() {
                   <td className="border border-ink/15 px-2 py-1 tabular-nums">{index + 1}</td>
                   <td className="border border-ink/15 px-2 py-1 font-mono">{student.admission_number}</td>
                   <td className="border border-ink/15 px-2 py-1">{student.full_name}</td>
+                  <td className="border border-ink/15 px-2 py-1">{enrollmentLabel(student, picked.term_id, picked.subject_id)}</td>
                   <td className="border border-ink/15 px-2 py-1 text-right font-mono">{displayScore(score)}</td>
                   <td className="border border-ink/15 px-2 py-1 text-right font-mono">
                     {typeof score === 'number' ? `${percentOf(score, maxScore).toFixed(1)}%` : '—'}

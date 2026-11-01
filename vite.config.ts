@@ -1,9 +1,12 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
+import { validateProductionConfig } from './src/lib/production-config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => {
+  if (command === 'build' && mode === 'production') validateProductionConfig(loadEnv(mode, '.', 'VITE_'))
+  return {
   plugins: [
     react(),
     tailwindcss(),
@@ -59,4 +62,5 @@ export default defineConfig({
   ],
   server: { host: '127.0.0.1', port: 5173 },
   preview: { host: '127.0.0.1', port: 4173 },
+  }
 })

@@ -112,7 +112,7 @@ export default function AnalysisPage() {
   const db = useDb()
   const { session, teacher, subjectScope } = useSession()
   const scale = resolveScale(db.gradingScales)
-  const school = db.schools[0]
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
 
   // The deck is a cross-term report, so `?deck=print` puts every slide on its own
   // page and the print run follows the deck instead of the analytics sheet.

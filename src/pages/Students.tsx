@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { MessageSquare, Paperclip, Plus, Search, Trash2 } from 'lucide-react'
+import { Archive, MessageSquare, Paperclip, Plus, Printer, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api, useDb } from '../data/db'
 import { useSession } from '../session'
 import { Avatar, Badge, EmptyState, Field, GradePill, Modal, PageHeader, SectionTitle } from '../components/ui'
 import { displayScore, gradeFor, gradeForMark, resolveScale } from '../lib/grading'
 import { formatDate, formatDateTime, ordinal, round } from '../lib/format'
 import { offeredSubjects } from '../lib/subjects'
+import { validateAdmissionNumber } from '../lib/admission-number'
+import { isOperationalStudent } from '../data/student-lifecycle'
 
 type SortKey = 'name' | 'admission' | 'class'
 
@@ -32,17 +34,6 @@ const BLANK_ADMISSION: AdmissionForm = {
   guardian_phone: '',
 }
 
-/** Next free number in the school's `IUPC/<year>/<nnn>` admission sequence. */
-function nextAdmissionNumber(existing: string[]): string {
-  const year = new Date().getFullYear()
-  const prefix = `IUPC/${year}/`
-  const used = existing
-    .filter((value) => value.startsWith(prefix))
-    .map((value) => Number(value.slice(prefix.length)))
-    .filter((value) => Number.isFinite(value))
-  return `${prefix}${String((used.length ? Math.max(...used) : 0) + 1).padStart(3, '0')}`
-}
-
 export default function Students() {
   const db = useDb()
   const { session } = useSession()
@@ -53,7 +44,7 @@ export default function Students() {
   const admitInto = (location.state as { admitInto?: string } | null)?.admitInto ?? null
 
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState<'All' | 'Active' | 'Alumni'>('All')
+  const [status, setStatus] = useState<'All' | 'Active' | 'Alumni' | 'Archived'>('All')
   const [classId, setClassId] = useState(admitInto ?? 'all')
   const [sort, setSort] = useState<SortKey>('name')
   const [noteText, setNoteText] = useState('')
@@ -62,13 +53,13 @@ export default function Students() {
     admitInto
       ? {
           ...BLANK_ADMISSION,
-          admission_number: nextAdmissionNumber(db.students.map((s) => s.admission_number)),
           class_id: admitInto,
         }
       : BLANK_ADMISSION,
   )
   const [formError, setFormError] = useState('')
   const [notice, setNotice] = useState('')
+  const [removing, setRemoving] = useState(false)
 
   // Drop the one-shot router state so a reload doesn't reopen the dialog.
   useEffect(() => {
@@ -76,6 +67,7 @@ export default function Students() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const isAdmin = session?.role === 'admin'
   const scale = resolveScale(db.gradingScales)
   const offered = useMemo(() => offeredSubjects(db.subjects), [db.subjects])
   const classSubjects = useMemo(() => {
@@ -98,7 +90,9 @@ export default function Students() {
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase()
     const rows = db.students.filter((student) => {
-      if (status !== 'All' && student.status !== status) return false
+      if (student.archived) {
+        if (!isAdmin || status !== 'Archived') return false
+      } else if (status === 'Archived' || (status !== 'All' && student.status !== status)) return false
       if (classId !== 'all' && student.class_id !== classId) return false
       if (!term) return true
       return (
@@ -115,7 +109,9 @@ export default function Students() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db.students, query, status, classId, sort, db.classes])
 
-  const selected = studentId ? db.students.find((student) => student._id === studentId) : null
+  const selected = studentId
+    ? db.students.find((student) => student._id === studentId && (isAdmin || !student.archived))
+    : null
 
   const performance = selected
     ? db.marks
@@ -135,14 +131,27 @@ export default function Students() {
   const average = numericScores.length ? numericScores.reduce((a, b) => a + b, 0) / numericScores.length : null
 
   const notes = selected ? db.notes.filter((note) => note.student_id === selected._id) : []
+  const reportCardHistory = isAdmin && selected?.archived
+    ? db.reportCards
+        .filter((record) => record.student_id === selected._id)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    : []
 
-  const canWrite = session?.role === 'admin' || session?.role === 'teacher'
-  const isAdmin = session?.role === 'admin'
+  // Teachers may add contextual notes only for a class they currently teach;
+  // deletion remains registrar-only so staff cannot erase another author's record.
+  const canAddNote = isAdmin || Boolean(
+    session?.role === 'teacher' &&
+      session.teacherId &&
+      selected &&
+      db.timetableSlots.some((slot) => {
+        const activeTerm = db.terms.find((term) => term.is_active)
+        return slot.teacher_id === session.teacherId && slot.class_id === selected.class_id && slot.term_id === activeTerm?._id
+      }),
+  )
 
   function startAdmission(presetClass?: string) {
     setForm({
       ...BLANK_ADMISSION,
-      admission_number: nextAdmissionNumber(db.students.map((s) => s.admission_number)),
       // Start in whichever class the roster is currently filtered to.
       class_id: presetClass ?? (classId !== 'all' ? classId : db.classes[0]?._id ?? ''),
       subject_ids: null,
@@ -155,11 +164,10 @@ export default function Students() {
     const fullName = form.full_name.trim().replace(/\s+/g, ' ')
     const admissionNumber = form.admission_number.trim()
     if (fullName.length < 2) return setFormError("Enter the student's full name.")
-    if (!admissionNumber) return setFormError('An admission number is required.')
-    if (db.students.some((student) => student.admission_number.toLowerCase() === admissionNumber.toLowerCase())) {
-      return setFormError(`${admissionNumber} is already on roll — check the register first.`)
-    }
+    const admissionError = validateAdmissionNumber(admissionNumber, db.students)
+    if (admissionError) return setFormError(admissionError)
     if (!form.class_id) return setFormError('Choose the class the student joins.')
+    try {
     await api.students.create({
       full_name: fullName,
       admission_number: admissionNumber,
@@ -171,11 +179,14 @@ export default function Students() {
       guardian_phone: form.guardian_phone.trim(),
       status: 'Active',
     })
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Student record could not be saved.')
+      return
+    }
     setNotice(`${fullName} admitted to ${classLabel(form.class_id)} · ${admissionNumber}`)
     if (again) {
       setForm({
         ...BLANK_ADMISSION,
-        admission_number: nextAdmissionNumber([...db.students.map((s) => s.admission_number), admissionNumber]),
         class_id: form.class_id,
         subject_ids: null,
       })
@@ -191,14 +202,43 @@ export default function Students() {
     setNoteText('')
   }
 
+  async function archiveStudent() {
+    if (!selected || !isAdmin || removing || selected.archived) return
+    const student = selected
+    setRemoving(true)
+    try {
+      await api.students.archive(student._id)
+      setNotice(`${student.full_name} (${student.admission_number}) was archived. Academic history was retained.`)
+      setNoteText('')
+      setStatus('Archived')
+      navigate('/dashboard/students', { replace: true })
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  async function reactivateStudent() {
+    if (!selected || !isAdmin || removing || !selected.archived) return
+    const student = selected
+    setRemoving(true)
+    try {
+      await api.students.reactivate(student._id)
+      setNotice(`${student.full_name} (${student.admission_number}) was reactivated.`)
+      setStatus(student.status)
+      navigate('/dashboard/students', { replace: true })
+    } finally {
+      setRemoving(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Students"
-        subtitle={`${filtered.length} of ${db.students.length} on roll`}
+        subtitle={`${filtered.length} ${status === 'Archived' ? 'archived' : 'students'} · ${db.students.filter(isOperationalStudent).length} active`}
         meta={
           <>
-            <span>{db.students.filter((s) => s.status === 'Active').length} active</span>
+            <span>{db.students.filter(isOperationalStudent).length} active</span>
             <span>{db.classes.length} streams</span>
           </>
         }
@@ -250,6 +290,7 @@ export default function Students() {
             <option value="All">All</option>
             <option value="Active">Active</option>
             <option value="Alumni">Alumni</option>
+            {isAdmin ? <option value="Archived">Archived</option> : null}
           </select>
         </label>
         <label>
@@ -271,18 +312,22 @@ export default function Students() {
             <option value="class">Class</option>
           </select>
         </label>
+        {classId !== 'all' ? <button type="button" className="btn btn-sm" onClick={() => navigate('/dashboard/classes', {state:{printClassId:classId,sort}})}><Printer size={13}/> Print class list</button> : null}
+        {classId !== 'all' ? <span className="text-[11px] text-ink/55">Prints the active class roster in the selected order.</span> : null}
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState
-          title={db.students.length ? 'No students match those filters' : 'No students on roll'}
+          title={status === 'Archived' ? 'No archived students match those filters' : db.students.some(isOperationalStudent) ? 'No students match those filters' : 'No active students on roll'}
           hint={
-            db.students.length
-              ? 'Adjust the search or clear the filters to see the full roster.'
-              : 'Admit the first student to start the register.'
+            status === 'Archived'
+              ? 'Adjust the search or class filter to find an archived record.'
+              : db.students.some(isOperationalStudent)
+                ? 'Adjust the search or clear the filters to see the full roster.'
+                : 'Admit the first active student to start the register.'
           }
           action={
-            !db.students.length && isAdmin ? (
+            !db.students.filter(isOperationalStudent).length && isAdmin ? (
               <button type="button" className="btn btn-primary btn-sm" onClick={() => startAdmission()}>
                 <Plus size={13} /> Add student
               </button>
@@ -339,7 +384,7 @@ export default function Students() {
                       <p className="font-mono text-[11px] text-ink/45">{student.guardian_phone}</p>
                     </td>
                     <td>
-                      <Badge tone={student.status === 'Active' ? 'ok' : 'neutral'}>{student.status}</Badge>
+                      <Badge tone={student.archived ? 'danger' : student.status === 'Active' ? 'ok' : 'neutral'}>{student.archived ? 'Archived' : student.status}</Badge>
                     </td>
                     <td className="text-right">
                       <button type="button" className="btn btn-sm" onClick={() => navigate(`/dashboard/students/${student._id}`)}>
@@ -364,13 +409,22 @@ export default function Students() {
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <Avatar name={selected.full_name} size={46} />
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="text-[14px] font-semibold">{selected.full_name}</p>
                 <p className="text-[11.5px] text-ink/50">
                   {selected.admission_number} · {classLabel(selected.class_id)} · {selected.gender}
                 </p>
               </div>
-              <Badge tone={selected.status === 'Active' ? 'ok' : 'neutral'}>{selected.status}</Badge>
+              <Badge tone={selected.archived ? 'danger' : selected.status === 'Active' ? 'ok' : 'neutral'}>{selected.archived ? 'Archived' : selected.status}</Badge>
+            </div>
+
+            <div className="rounded border border-rule px-3 py-2.5">
+              <p className="micro">Subjects enrolled</p>
+              <p className="mt-1 text-[12px] text-ink/75">
+                {selected.subject_ids === undefined
+                  ? 'Class curriculum'
+                  : db.subjects.filter((subject) => selected.subject_ids?.includes(subject._id)).map((subject) => `${subject.name} (${subject.code})`).join(', ') || 'No subjects assigned'}
+              </p>
             </div>
 
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded border border-rule bg-sunken/50 px-3 py-2.5 text-[12px]">
@@ -419,6 +473,33 @@ export default function Students() {
               )}
             </div>
 
+            {selected.archived && isAdmin ? (
+              <div>
+                <SectionTitle right={<span className="text-[11px] text-ink/45">{reportCardHistory.length} records</span>}>
+                  Report-card history
+                </SectionTitle>
+                {reportCardHistory.length ? (
+                  <ul className="space-y-2">
+                    {reportCardHistory.map((record) => {
+                      const term = db.terms.find((row) => row._id === record.term_id)
+                      const comments = [record.academic, record.activities, record.conduct, record.principal, record.hse]
+                        .filter((value) => value.trim())
+                      return (
+                        <li key={record._id} className="rounded border border-rule px-3 py-2">
+                          <p className="text-[11px] font-semibold text-ink/70">{term ? `${term.name} ${term.academic_year}` : 'Historical term'}</p>
+                          {comments.length ? (
+                            <ul className="mt-1 space-y-1 text-[11.5px] text-ink/65">
+                              {comments.map((comment, index) => <li key={`${record._id}-${index}`}>{comment}</li>)}
+                            </ul>
+                          ) : <p className="mt-1 text-[11px] text-ink/40">No written comments recorded.</p>}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                ) : <p className="text-[12px] text-ink/45">No report cards recorded for this student.</p>}
+              </div>
+            ) : null}
+
             <div>
               <SectionTitle right={<span className="text-[11px] text-ink/45">{notes.length} notes</span>}>Notes &amp; attachments</SectionTitle>
               <ul className="space-y-2">
@@ -426,7 +507,7 @@ export default function Students() {
                   <li key={note._id} className="rounded border border-rule px-3 py-2">
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-[12.5px] text-ink/80">{note.body}</p>
-                      {canWrite ? (
+                      {isAdmin && !selected.archived ? (
                         <button
                           type="button"
                           className="text-ink/30 hover:text-danger"
@@ -443,7 +524,7 @@ export default function Students() {
                   </li>
                 ))}
               </ul>
-              {canWrite ? (
+              {canAddNote && !selected.archived ? (
                 <div className="mt-2 flex items-end gap-2">
                   <label className="flex-1">
                     <span className="field-label">Add a note</span>
@@ -461,16 +542,46 @@ export default function Students() {
                     <Plus size={13} /> Add
                   </button>
                 </div>
+              ) : session?.role === 'teacher' && !selected.archived ? (
+                <p className="mt-2 text-[11px] text-ink/45">Student notes can be added only for classes on your current timetable; contact the registrar to correct or remove a note.</p>
               ) : null}
+              {selected.archived ? <p className="mt-2 text-[11px] text-ink/45">Archived history is read-only.</p> : null}
               <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-ink/35">
                 <Paperclip size={10} /> File attachments are recorded in the data model but upload is not enabled in this build.
               </p>
             </div>
 
-            <p className="text-[10.5px] text-ink/35">
-              Marks, notes and the timetable are live. Editing an existing student's details and uploading attachments are not
-              enabled in this build.
-            </p>
+            {isAdmin ? (
+              <div className="flex flex-col-reverse gap-2 border-t border-rule pt-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="max-w-sm text-[10.5px] leading-relaxed text-ink/45">
+                  {selected.archived ? 'Archived profiles and academic history are restricted to school administrators.' : 'Archiving removes this student from active workflows while retaining all academic history.'}
+                </p>
+                {selected.archived ? (
+                  <button type="button" className="btn btn-primary btn-sm shrink-0" disabled={removing} onClick={() => void reactivateStudent()}>
+                    <RotateCcw size={13} /> {removing ? 'Reactivating…' : 'Reactivate student'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm shrink-0"
+                    data-action="archive-student"
+                    disabled={removing}
+                    onClick={() => {
+                      if (window.confirm(`Archive ${selected.full_name} (${selected.admission_number})? Marks, reports, notes and enrollment history will be retained.`)) {
+                        void archiveStudent()
+                      }
+                    }}
+                  >
+                    <Archive size={13} /> {removing ? 'Archiving…' : 'Archive student'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-[10.5px] text-ink/35">
+                Marks, notes and the timetable are live. Editing an existing student's details and uploading attachments are not
+                enabled in this build.
+              </p>
+            )}
           </div>
         ) : null}
       </Modal>
@@ -501,13 +612,16 @@ export default function Students() {
               autoFocus
               value={form.full_name}
               onChange={(event) => setForm({ ...form, full_name: event.target.value })}
-              placeholder="Amina Abdalla"
+              placeholder="Student full name"
             />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Admission number" hint="Pre-filled from the register's number sequence.">
+            <Field label="Admission number" hint="Enter the school's admission number manually.">
               <input
                 className="input-field figure"
+                name="admission_number"
+                maxLength={48}
+                required
                 value={form.admission_number}
                 onChange={(event) => setForm({ ...form, admission_number: event.target.value })}
               />
@@ -549,7 +663,7 @@ export default function Students() {
                 className="input-field"
                 value={form.guardian_name}
                 onChange={(event) => setForm({ ...form, guardian_name: event.target.value })}
-                placeholder="Hassan Abdalla"
+                placeholder="Guardian full name"
               />
             </Field>
             <Field label="Guardian phone">

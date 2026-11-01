@@ -185,8 +185,8 @@ export default function Subjects() {
                             type="button"
                             aria-label={`Delete ${subject.name}`}
                             className="text-ink/25 transition hover:text-danger disabled:opacity-30"
-                            disabled={used > 0}
-                            title={used > 0 ? 'Cannot delete: exams reference this subject' : 'Delete subject'}
+                            disabled={used > 0 || subject.school_id === null}
+                            title={subject.school_id === null ? 'Shared curriculum reference cannot be deleted' : used > 0 ? 'Cannot delete: exams reference this subject' : 'Delete subject'}
                             onClick={() => void api.subjects.remove(subject._id)}
                           >
                             <Trash2 size={13} />

@@ -1,0 +1,2 @@
+# SPA history routing for hosts that support _redirects (Netlify/Cloudflare Pages).
+/* /index.html 200

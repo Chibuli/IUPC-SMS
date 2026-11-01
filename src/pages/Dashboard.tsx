@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight, BookOpen, CalendarClock, FileText, GraduationCap, Users } from 'lucide-react'
 import { useDb } from '../data/db'
+import { isOperationalStudent } from '../data/student-lifecycle'
 import { useSession } from '../session'
 import { Badge, GradePill, PageHeader, ProgressBar, SectionTitle, StatCard } from '../components/ui'
 import { displayScore, gradeForMark, resolveScale } from '../lib/grading'
@@ -9,7 +10,7 @@ import { formatDate, round } from '../lib/format'
 export default function Dashboard() {
   const db = useDb()
   const { session, teacher, canEditExam, subjectScope } = useSession()
-  const school = db.schools[0]
+  const school = db.schools[0] ?? { _id: 'school-unconfigured', name: 'IUPC Academy', code: '', address: '', postal: '', city: '', contact_email: '', phone_number: '', logo_url: null, crest_url: null, motto: '' }
   const activeTerm = db.terms.find((term) => term.is_active) ?? db.terms[0]
   const scale = resolveScale(db.gradingScales)
 
@@ -19,32 +20,35 @@ export default function Dashboard() {
     .sort((a, b) => b.exam_date.localeCompare(a.exam_date))
 
   const rosterFor = (classId: string) =>
-    db.students.filter((student) => student.class_id === classId && student.status === 'Active')
+    db.students.filter((student) => student.class_id === classId && isOperationalStudent(student))
 
-  const enteredFor = (examId: string) => db.marks.filter((mark) => mark.exam_id === examId && mark.score !== null).length
+  const operationalStudentIds = new Set(db.students.filter(isOperationalStudent).map((student) => student._id))
+  const enteredFor = (examId: string) => db.marks.filter((mark) => mark.exam_id === examId && operationalStudentIds.has(mark.student_id) && mark.score !== null).length
 
   const recent = [...db.marks]
-    .filter((mark) => mark.score !== null)
+    .filter((mark) => operationalStudentIds.has(mark.student_id) && mark.score !== null)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 6)
 
   const totalLessons = db.timetableSlots.filter((slot) => slot.term_id === activeTerm?._id).length
 
   return (
-    <>
+    <div className="overview-page">
+      <section className="overview-heading" aria-label="Academic overview">
+      <p className="overview-eyebrow">Academic overview</p>
       <PageHeader
         title={session?.role === 'teacher' ? `Good day, ${session.name}` : 'Overview'}
         subtitle={
           session?.role === 'teacher'
-            ? `${subjectScope ? `${subjectScope.length} subjects assigned` : 'Every subject in view'} · ${activeTerm?.name} ${activeTerm?.academic_year}`
+            ? `${school.name} · ${subjectScope ? `${subjectScope.length} subjects assigned` : 'Every subject in view'}`
             : session?.role === 'guest'
               ? 'Read-only preview of the campus record.'
-              : `${school.name} · ${activeTerm?.name} ${activeTerm?.academic_year}`
+              : `${school.name} · Mombasa, Kenya`
         }
         meta={
           <>
             <span className="inline-flex items-center gap-1.5">
-              <CalendarClock size={13} /> Active term: <span className="font-medium text-ink/80">{activeTerm?.name}</span>
+              <CalendarClock size={15} /> Active term: <span className="font-medium text-ink/80">{activeTerm ? `${activeTerm.name} · ${activeTerm.academic_year}` : 'Not configured'}</span>
             </span>
             <span>{db.classes.length} streams · {totalLessons} lessons on the board</span>
           </>
@@ -60,11 +64,12 @@ export default function Dashboard() {
           </>
         }
       />
+      </section>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="overview-stats grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="School statistics">
         <StatCard
           label="Active students"
-          value={db.students.filter((student) => student.status === 'Active').length}
+          value={db.students.filter(isOperationalStudent).length}
           hint={`${db.students.length} on roll`}
           icon={Users}
         />
@@ -85,18 +90,18 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-7 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-        <section className="min-w-0">
+      <div className="overview-detail-grid mt-7 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
+        <section className="overview-exams min-w-0">
           <SectionTitle right={<span className="text-[11px] text-ink/45">{visibleExams.length} papers</span>}>
             Exams in {activeTerm?.name ?? 'term'}
           </SectionTitle>
           {visibleExams.length === 0 ? (
-            <p className="rounded border border-dashed border-rule px-4 py-8 text-center text-[12.5px] text-ink/45">
+            <p className="overview-empty rounded border border-dashed border-rule px-4 py-8 text-center text-[12.5px] text-ink/45">
               No exams scheduled for this term.
             </p>
           ) : (
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
+            <div className="overview-exam-table card overflow-hidden">
+              <div className="overflow-x-auto" role="region" aria-label="Current term examinations" tabIndex={0}>
                 <table className="data-table min-w-[560px]">
                 <thead>
                   <tr>
@@ -155,7 +160,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="mt-3 flex flex-wrap items-center gap-4 rounded border border-brass/30 bg-brass/8 px-3 py-2 text-[11.5px] text-brass-deep">
+          <div className="overview-score-guide mt-3 flex flex-wrap items-center gap-4 rounded border border-brass/30 bg-brass/8 px-3 py-2 text-[11.5px] text-brass-deep">
             <span className="font-semibold uppercase tracking-[0.1em]">Score codes</span>
             <span>
               <strong>X</strong> — missing marks (absent or incomplete assessment)
@@ -166,9 +171,9 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section className="min-w-0">
+        <section className="overview-recent min-w-0">
           <SectionTitle>Recent marks</SectionTitle>
-          <div className="card divide-y divide-rule">
+          <div className="overview-marks card divide-y divide-rule">
             {recent.length === 0 ? (
               <p className="px-4 py-6 text-center text-[12px] text-ink/45">No marks entered yet.</p>
             ) : (
@@ -181,7 +186,7 @@ export default function Dashboard() {
                     ? gradeForMark(mark.score, exam?.max_score ?? 100, scale.bands)
                     : (mark.score ?? '—')
                 return (
-                  <div key={mark._id} className="flex items-center gap-3 px-3 py-2.5">
+                  <div key={mark._id} className="overview-mark-row flex items-center gap-3 px-3 py-2.5">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12.5px] font-medium">{student?.full_name}</p>
                       <p className="text-[11px] text-ink/45">
@@ -196,7 +201,7 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="mt-4 card p-3.5">
+          <div className="overview-term mt-4 card p-3.5">
             <p className="micro">This term</p>
             <dl className="mt-2 space-y-1.5 text-[12.5px]">
               <div className="flex justify-between">
@@ -204,7 +209,7 @@ export default function Dashboard() {
                 <dd className="figure">{round(
                   (() => {
                     const values = db.marks
-                      .filter((m) => typeof m.score === 'number' && visibleExams.some((e) => e._id === m.exam_id))
+                      .filter((m) => operationalStudentIds.has(m.student_id) && typeof m.score === 'number' && visibleExams.some((e) => e._id === m.exam_id))
                       .map((m) => m.score as number)
                     return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null
                   })(),
@@ -213,7 +218,7 @@ export default function Dashboard() {
               <div className="flex justify-between">
                 <dt className="text-ink/55">Marks entered</dt>
                 <dd className="figure">
-                  {db.marks.filter((m) => visibleExams.some((e) => e._id === m.exam_id) && m.score !== null).length}
+                  {db.marks.filter((m) => operationalStudentIds.has(m.student_id) && visibleExams.some((e) => e._id === m.exam_id) && m.score !== null).length}
                 </dd>
               </div>
               <div className="flex justify-between">
@@ -234,6 +239,6 @@ export default function Dashboard() {
           ) : null}
         </section>
       </div>
-    </>
+    </div>
   )
 }

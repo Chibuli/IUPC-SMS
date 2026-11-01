@@ -13,6 +13,8 @@ import {
 } from '../lib/permissions'
 import { isoToLocalInput } from '../lib/format'
 import { Avatar, Badge, Modal, SectionTitle } from './ui'
+import { supabaseConfigured } from '../data/supabase'
+import type { StaffAccountStatus } from '../lib/teacher-onboarding'
 
 /** One phrase for what an account may do: read-only, or writing marks. */
 export function AccessBadge({ teacher }: { teacher: Pick<Teacher, 'permissions'> }) {
@@ -21,11 +23,12 @@ export function AccessBadge({ teacher }: { teacher: Pick<Teacher, 'permissions'>
 }
 
 /**
- * Whether the teacher has ever chosen a password. This is a different question
- * from what the account may do — someone can hold subjects and be read-only, and
- * still have no way to sign in at all — so the registrar reads both here.
+ * Hosted state comes only from the protected Auth inspection. Email verification
+ * is not evidence that password setup is complete. Hashes apply to legacy local
+ * records only and are never used to infer hosted activation.
  */
-export function AccountBadge({ teacher }: { teacher: Pick<Teacher, 'password_hash'> }) {
+export function AccountBadge({ teacher, status }: { teacher: Pick<Teacher, 'password_hash'>; status?: StaffAccountStatus }) {
+  if (supabaseConfigured) return <Badge tone={status === 'email_verified' ? 'neutral' : 'brass'}>{status === 'email_verified' ? 'Email verified' : status === 'invitation_pending' ? 'Invitation pending' : status === 'requires_attention' ? 'Invitation requires attention' : 'Account status unavailable'}</Badge>
   return teacher.password_hash ? (
     <Badge tone="neutral">Account active</Badge>
   ) : (
@@ -155,7 +158,7 @@ export function TeacherPermissionsPanel({ open, onClose }: { open: boolean; onCl
         <SectionTitle
           right={
             <span className="text-[11px] text-ink/45" data-count="awaiting-signup">
-              {entering} of {db.teachers.length} may enter marks · {awaiting} awaiting sign-up
+              {entering} of {db.teachers.length} may enter marks · {supabaseConfigured ? 'Review Auth status in the staff register' : `${awaiting} awaiting sign-up`}
             </span>
           }
         >

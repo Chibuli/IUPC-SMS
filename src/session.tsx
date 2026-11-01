@@ -1,10 +1,14 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDb } from './data/db'
 import type { Exam, ExamStatus, ID, Role, Teacher, TeacherPermissionKey } from './data/types'
 import { effectiveDeadline, hasPermission, isWindowClosed, windowLabel } from './lib/permissions'
+import { supabase, supabaseConfigured } from './data/supabase'
+import { clearDatabase, refreshDatabase, replaceDatabase } from './data/db'
+import { getAccountScope, setAccountScope } from './data/backend'
+import { clearSchoolCache, readSchoolCache, saveSchoolCache } from './data/school-cache'
+import { lockOwnerRecords, refreshQueue, setQueueOwner, syncNow, unlockOwnerRecords } from './lib/offline'
+import { initialAuthCallback } from './lib/auth-callback'
 
-const SESSION_KEY = 'iupc.session.v1'
-const LEGACY_SESSION_KEY = 'meridian.session.v1'
 
 /**
  * What a teacher selects on the Marks Entry bar, before any paper row exists.
@@ -26,12 +30,20 @@ export interface Session {
   role: Role
   name: string
   teacherId?: string
+  schoolId?: string
 }
 
 interface SessionContextValue {
   session: Session | null
-  signIn: (session: Session) => void
+  sessionReady: boolean
+  authReady: boolean
+  authLinkError: boolean
+  hasAuthSession: boolean
   signOut: () => void
+  signInWithPassword: (email: string, password: string) => Promise<string | null>
+  sendPasswordRecovery: (email: string) => Promise<string | null>
+  updatePassword: (password: string) => Promise<string | null>
+  passwordSetupRequired: boolean
   canEditExam: (exam: Exam) => EditPermission
   /** The same check for a selection that may not have a paper row yet. */
   canEditPaper: (paper: PaperRef) => EditPermission
@@ -51,39 +63,188 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | null>(null)
 
-function read(): Session | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY) ?? localStorage.getItem(LEGACY_SESSION_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Session
-    if (!parsed || !parsed.role || !parsed.name) return null
-    if (!localStorage.getItem(SESSION_KEY)) localStorage.setItem(SESSION_KEY, JSON.stringify(parsed))
-    return parsed
-  } catch {
-    return null
-  }
-}
-
 export function SessionProvider({ children }: { children: ReactNode }) {
   const db = useDb()
-  const [session, setSession] = useState<Session | null>(() => read())
+  const [session, setSession] = useState<Session | null>(null)
+  const [sessionReady, setSessionReady] = useState(!supabaseConfigured)
+  const [authReady, setAuthReady] = useState(!supabaseConfigured)
+  const [authLinkError, setAuthLinkError] = useState(initialAuthCallback.error)
+  const callbackReviewed = useRef(false)
+  const [hasAuthSession, setHasAuthSession] = useState(false)
+  /** The account whose queued marks may be read; null once signed out. */
+  const userIdRef = useRef<string | null>(null)
+  const activation = useRef(0)
+  const [passwordSetupRequired, setPasswordSetupRequired] = useState(false)
 
-  const signIn = useCallback((next: Session) => {
+  const activateUser = useCallback(async (userId: string): Promise<boolean> => {
+    if (!supabase) return false
+    const generation = ++activation.current
+    const current = () => generation === activation.current
     try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(next))
-    } catch {
-      /* ignore */
+    if (getAccountScope()?.userId !== userId) {
+      setSessionReady(false)
+      clearDatabase(); setSession(null); setQueueOwner(null)
     }
+    const { data: auth } = await supabase.auth.getSession()
+    if (!current() || auth.session?.user.id !== userId) return false
+    if (!navigator.onLine) {
+      const cached = readSchoolCache(userId, auth.session.expires_at)
+      if (!cached) { clearDatabase(); setSession(null); setQueueOwner(null); return false }
+      await refreshQueue()
+      if (!current()) return false
+      setAccountScope({ userId, schoolId: cached.session.schoolId, verified: false })
+      replaceDatabase(cached.database)
+      userIdRef.current = userId
+      setSession(cached.session)
+      setQueueOwner({ userId, schoolId: cached.session.schoolId })
+      void unlockOwnerRecords(userId)
+      return true
+    }
+    // An offline snapshot never permits network dispatch. Revalidate first.
+    const priorScope = getAccountScope()
+    if (priorScope) setAccountScope({ ...priorScope, verified: false })
+    const { data, error } = await supabase.from('memberships').select('school_id,role,teacher_id,active,schools(name)').eq('user_id', userId).eq('active', true).maybeSingle()
+    if (!current()) return false
+    if (error || !data) { clearSchoolCache(); clearDatabase(); setSession(null); setQueueOwner(null); return false }
+    const { data: profile } = await supabase.from('profiles').select('full_name,active').eq('id', userId).maybeSingle()
+    if (!current()) return false
+    if (!profile?.active) { clearSchoolCache(); clearDatabase(); setSession(null); setQueueOwner(null); await supabase.auth.signOut(); return false }
+    if (priorScope && priorScope.schoolId !== data.school_id) { clearSchoolCache(); clearDatabase(); setSession(null); setQueueOwner(null) }
+    setAccountScope({ userId, schoolId: data.school_id, verified: true })
+    let loaded
+    try { loaded = await refreshDatabase(data.school_id) } catch { if (current()) { clearDatabase(); setSession(null); setQueueOwner(null) } return false }
+    if (!current()) return false
+    const next: Session = { role: data.role, name: profile.full_name, teacherId: data.teacher_id ?? undefined, schoolId: data.school_id }
+    saveSchoolCache(userId, auth.session.expires_at ?? 0, { ...next, schoolId: data.school_id }, loaded)
     setSession(next)
+    userIdRef.current = userId
+    setQueueOwner({ userId, schoolId: data.school_id })
+    // The owner is back: their parked marks become reviewable and sendable again.
+    void unlockOwnerRecords(userId)
+    void syncNow()
+    return true
+    } catch {
+      if (current()) { clearDatabase(); setSession(null); setQueueOwner(null) }
+      return false
+    } finally {
+      // An older activation must not finish a newer account's restoration.
+      if (current()) setSessionReady(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!supabaseConfigured || !supabase) return
+    let alive = true
+    const restore = () => {
+      const generation = activation.current
+      const noSession = () => {
+        if (alive && generation === activation.current) {
+          setHasAuthSession(false); setAuthReady(true)
+          clearDatabase(); setSession(null); setQueueOwner(null); setSessionReady(true)
+        }
+      }
+      const readSession = async () => {
+        // SDK initialization may keep a prior login after a failed callback.
+        // A retained session must not authorize a failed invitation/recovery.
+        const { error } = await supabase!.auth.initialize()
+        if (!callbackReviewed.current && alive) {
+          callbackReviewed.current = true
+          const unexchangedCode = initialAuthCallback.pkce && new URL(window.location.href).searchParams.has('code')
+          const failed = initialAuthCallback.error || Boolean(initialAuthCallback.setup && (error || unexchangedCode))
+          setAuthLinkError(failed)
+          setPasswordSetupRequired(initialAuthCallback.setup && !failed)
+        }
+        return supabase!.auth.getSession()
+      }
+      void readSession().then(({ data }) => {
+        if (!alive) return
+        setHasAuthSession(Boolean(data.session)); setAuthReady(true)
+        if (data.session) void activateUser(data.session.user.id)
+        else noSession()
+      }).catch(noSession)
+    }
+    restore()
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, authSession) => {
+      if (!alive) return
+      setHasAuthSession(Boolean(authSession)); setAuthReady(true)
+      if (event === 'SIGNED_OUT' || !authSession) {
+        ++activation.current
+        setSessionReady(true)
+        setPasswordSetupRequired(false)
+        clearSchoolCache()
+        // Park this account's marks: they stay on the device, they are not shown
+        // to whoever signs in next, and they are never sent under that account.
+        void lockOwnerRecords(userIdRef.current)
+        userIdRef.current = null
+        setQueueOwner(null)
+        clearDatabase(); setSession(null); return
+      }
+      if (event === 'PASSWORD_RECOVERY') setPasswordSetupRequired(true)
+      if (getAccountScope() && getAccountScope()?.userId !== authSession.user.id) {
+        ++activation.current
+        setSessionReady(false)
+        clearSchoolCache(); clearDatabase(); setSession(null); setQueueOwner(null)
+      }
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'PASSWORD_RECOVERY') {
+        window.setTimeout(() => { if (alive) void activateUser(authSession.user.id) }, 0)
+      }
+    })
+    const reconnect = restore
+    const disconnect = () => { ++activation.current; const scope = getAccountScope(); if (scope) setAccountScope({ ...scope, verified: false }); restore() }
+    window.addEventListener('online', reconnect)
+    window.addEventListener('offline', disconnect)
+    return () => { alive = false; ++activation.current; subscription.unsubscribe(); window.removeEventListener('online', reconnect); window.removeEventListener('offline', disconnect) }
+  }, [activateUser])
+
+  const signInWithPassword = useCallback(async (email: string, password: string) => {
+    if (!supabase) return 'Production authentication is not configured.'
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
+    if (error || !data.user) return 'Email or password is incorrect.'
+    // Membership is loaded from the authoritative database by the auth listener.
+    // Return success only after the handler has populated the scoped application session.
+    for (let attempt=0; attempt<30; attempt+=1) {
+      const { data: membership } = await supabase.from('memberships').select('school_id,active').eq('user_id',data.user.id).eq('active',true).maybeSingle()
+      if (!membership) { await supabase.auth.signOut(); return 'This account is not linked to an active school.' }
+      const { data: profile } = await supabase.from('profiles').select('active').eq('id',data.user.id).maybeSingle()
+      if (!profile?.active) { await supabase.auth.signOut(); return 'This account is inactive.' }
+      const loaded = await activateUser(data.user.id)
+      if (loaded) return null
+      await new Promise((resolve)=>setTimeout(resolve,100))
+    }
+    await supabase.auth.signOut()
+    return 'The account could not load its school membership. Contact the administrator.'
+  }, [activateUser])
+
+  const sendPasswordRecovery = useCallback(async (email: string) => {
+    if (!supabase) return 'Production authentication is not configured.'
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo: `${window.location.origin}/auth/callback?setup=1` })
+    return error ? 'Password recovery could not be started. Check the email and try again.' : null
+  }, [])
+
+  const updatePassword = useCallback(async (password: string) => {
+    if (!supabase || password.length < 12) return 'Use a password of at least 12 characters.'
+    const { data: auth } = await supabase.auth.getSession()
+    if (!auth.session) return 'This sign-in link has expired. Request a new invitation or recovery link.'
+    const { data: verified, error: verificationError } = await supabase.auth.getUser()
+    if (verificationError || !verified.user || verified.user.id !== auth.session.user.id) return 'This sign-in link is invalid or expired. Request a new invitation or recovery link.'
+    const { error } = await supabase.auth.updateUser({ password })
+    if (error) return 'The password could not be updated. Request a new recovery link and try again.'
+    setPasswordSetupRequired(false)
+    window.history.replaceState({}, '', window.location.pathname)
+    return null
   }, [])
 
   const signOut = useCallback(() => {
-    try {
-      localStorage.removeItem(SESSION_KEY)
-      localStorage.removeItem(LEGACY_SESSION_KEY)
-    } catch {
-      /* ignore */
-    }
+    ++activation.current
+    setSessionReady(true)
+    setHasAuthSession(false)
+    setPasswordSetupRequired(false)
+    clearSchoolCache()
+    void lockOwnerRecords(userIdRef.current)
+    userIdRef.current = null
+    setQueueOwner(null)
+    if (supabase) void supabase.auth.signOut()
+    clearDatabase()
     setSession(null)
   }, [])
 
@@ -161,8 +322,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session?.role, teacher])
 
   const value = useMemo(
-    () => ({ session, signIn, signOut, canEditExam, canEditPaper, can, subjectScope, teacher, mayEnterMarks, marksCloseAt }),
-    [session, signIn, signOut, canEditExam, canEditPaper, can, subjectScope, teacher, mayEnterMarks, marksCloseAt],
+    () => ({ session, sessionReady, authReady, authLinkError, hasAuthSession, signOut, signInWithPassword, sendPasswordRecovery, updatePassword, passwordSetupRequired, canEditExam, canEditPaper, can, subjectScope, teacher, mayEnterMarks, marksCloseAt }),
+    [session, sessionReady, authReady, authLinkError, hasAuthSession, signOut, signInWithPassword, sendPasswordRecovery, updatePassword, passwordSetupRequired, canEditExam, canEditPaper, can, subjectScope, teacher, mayEnterMarks, marksCloseAt],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

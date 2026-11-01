@@ -1,0 +1,5 @@
+-- Intentionally preserve the composite (subject_id, school_id) foreign keys
+-- created in the initial schema. Shared catalogue rows are reference data and
+-- must be copied into a school's subjects table before use by tenant records.
+-- Migration 009 provisions these copies and enforces administrator-only
+-- catalogue offering changes; no cross-school subject references are allowed.

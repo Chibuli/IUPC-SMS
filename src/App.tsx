@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import AppLayout from './AppLayout'
 import { useSession } from './session'
@@ -15,19 +15,25 @@ import Analysis from './pages/Analysis'
 import Reports from './pages/Reports'
 import ReportCards from './pages/ReportCards'
 import Settings from './pages/Settings'
+import AuthCallback from './pages/AuthCallback'
+import { PasswordRecoveryForm } from './components/BackendSetup'
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { session } = useSession()
+  const { session, sessionReady } = useSession()
   const location = useLocation()
+  if (!sessionReady) return null
   if (!session) return <Navigate to="/" state={{ from: location }} replace />
   return <>{children}</>
 }
 
 export default function App() {
   const { session } = useSession()
+  const navigate = useNavigate()
   return (
+    <>
     <Routes>
       <Route path="/" element={session ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route
         path="/dashboard"
         element={
@@ -56,5 +62,7 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    <PasswordRecoveryForm onDone={() => navigate('/', { replace: true })} />
+    </>
   )
 }

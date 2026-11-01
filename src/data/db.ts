@@ -1,669 +1,121 @@
+import { validateAdmissionNumber } from '../lib/admission-number'
 import { useSyncExternalStore } from 'react'
-import { SCHOOL_ID, seedDatabase } from './seed'
 import { initialsOf } from '../lib/format'
-import { enqueueWrite } from '../lib/offline'
+import { enqueueWrite, submitMarkScore, type SubmitOutcome } from '../lib/offline'
 import { normalisePermissions } from '../lib/permissions'
-import type {
-  BellSchedule,
-  ClassRow,
-  Database,
-  Exam,
-  GradingScale,
-  Mark,
-  Note,
-  ReportCard,
-  Student,
-  Subject,
-  SubjectLevel,
-  Teacher,
-  TeacherPermissionKey,
-  Term,
-  TimetableSlot,
-} from './types'
+import { supabaseConfigured, supabase } from './supabase'
+import { getActiveSchoolId, getAccountScope, loadSchoolDatabase, setActiveSchoolId } from './backend'
+import { readSchoolCache, saveSchoolCache } from './school-cache'
+import type { BellSchedule, ClassRow, Database, Exam, GradingScale, Mark, Note, ReportCard, Student, Subject, SubjectLevel, Teacher, TeacherPermissionKey, Term, TimetableSlot } from './types'
 
-const DB_KEY = 'iupc.db.v1'
-const LEGACY_DB_KEY = 'meridian.db.v1'
-const SEED_VERSION_KEY = 'iupc.seedVersion'
-/**
- * Bumped when the demo dataset changes shape in a way every browser must pick
- * up. Version 3 is the Years 7–13 campus: new classes, a new roll, new papers
- * and marks. Rows from an older shape cannot be merged into it, so a stale
- * browser rebuilds the demo tables from the seed and keeps only catalogue
- * additions the registrar made by hand (which stand alone).
- */
-const SEED_VERSION = 3
-
-const TABLES: (keyof Database)[] = [
-  'schools',
-  'classes',
-  'teachers',
-  'subjects',
-  'students',
-  'terms',
-  'exams',
-  'marks',
-  'gradingScales',
-  'reportCards',
-  'notes',
-  'timetableSlots',
-  'bellSchedules',
-  'markWindows',
-]
-
-/** A subject row as it may sit in storage from before the catalogue existed. */
-type StoredSubject = Omit<Subject, 'level' | 'offered'> & { level?: SubjectLevel; offered?: boolean }
-
-function parse(raw: string | null): Database | null {
-  if (!raw) return null
-  try {
-    const value = JSON.parse(raw) as Partial<Database>
-    if (!value || typeof value !== 'object') return null
-    return value as Database
-  } catch {
-    return null
+const EMPTY_DATABASE:Database={schools:[],classes:[],teachers:[],subjects:[],students:[],terms:[],exams:[],marks:[],gradingScales:[],reportCards:[],notes:[],timetableSlots:[],bellSchedules:[],markWindows:[]}
+let db:Database=EMPTY_DATABASE
+const listeners=new Set<()=>void>()
+function commit(next:Database){db=next;listeners.forEach(listener=>listener())}
+function subscribe(listener:()=>void){listeners.add(listener);return()=>listeners.delete(listener)}
+const snapshot=()=>db
+export function replaceDatabase(next:Database){db=next;listeners.forEach(listener=>listener())}
+export function clearDatabase(){setActiveSchoolId(null);replaceDatabase(EMPTY_DATABASE)}
+export async function refreshDatabase(schoolId:string){
+  const scope=getAccountScope()
+  if(!scope?.verified||scope.schoolId!==schoolId)throw new Error('School membership must be verified before loading records.')
+  const next=await loadSchoolDatabase(schoolId)
+  if(getAccountScope()!==scope||next.schools.length!==1||next.schools[0]._id!==schoolId)throw new Error('The school session changed while loading records.')
+  replaceDatabase(next)
+  const{data}=await supabase!.auth.getSession()
+  if(getAccountScope()===scope&&data.session?.user.id===scope.userId){
+    const cached=readSchoolCache(scope.userId,data.session.expires_at)
+    if(cached&&cached.session.schoolId===schoolId)saveSchoolCache(scope.userId,data.session.expires_at!,cached.session,next)
   }
+  return next
 }
+async function refreshActiveDatabase(){const schoolId=getActiveSchoolId();if(schoolId)await refreshDatabase(schoolId)}
+export function useDb():Database{return useSyncExternalStore(subscribe,snapshot,snapshot)}
+export const getDb=snapshot
+export const uid=(prefix='loc')=>`${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`
+const now=()=>new Date().toISOString()
+function active(allowOffline=false){const scope=getAccountScope();const schoolId=getActiveSchoolId();if(!schoolId||!supabase||!scope||(!allowOffline&&!scope.verified))throw new Error('No verified school database session. Reconnect to verify membership.');return{schoolId,client:supabase}}
+function fail(message:string):never{throw new Error(message)}
+function schoolIdForWrite(){return getActiveSchoolId()??fail('No authenticated school database session.')}
+async function insert(table:string,values:Record<string,unknown>){const{client,schoolId}=active();const{data,error}=await client.from(table).insert({...values,school_id:schoolId}).select('*').single();if(error)fail('The record could not be saved. Check your access and the entered values.');return data as Record<string,any>}
+async function update(table:string,id:string,values:Record<string,unknown>){const{client}=active();const{data,error}=await client.from(table).update(values).eq('id',id).select('*').maybeSingle();if(error||!data)fail('The record could not be updated. It may no longer exist or you may not have access.');return data as Record<string,any>}
+async function remove(table:string,id:string){const{client}=active();const{error,count}=await client.from(table).delete({count:'exact'}).eq('id',id);if(error||count===0)fail('The record could not be deleted. It may no longer exist or you may not have access.')}
+async function save(table:string,values:Record<string,unknown>,conflict:string){const{client,schoolId}=active();const{data,error}=await client.from(table).upsert({...values,school_id:schoolId},{onConflict:conflict}).select('*').single();if(error)fail('The record could not be saved. Check your access and the entered values.');return data as Record<string,any>}
 
-/** Seed + whatever survives in storage, with new tables back-filled. */
-function load(): Database {
-  const base = seedDatabase()
-  let stored: Database | null = null
-  let migrated = false
-  try {
-    stored = parse(localStorage.getItem(DB_KEY))
-    if (!stored) {
-      stored = parse(localStorage.getItem(LEGACY_DB_KEY))
-      migrated = Boolean(stored)
-    }
-  } catch {
-    stored = null // storage unavailable or blocked — fall back to seed
-  }
-  if (!stored) {
-    try {
-      localStorage.setItem(SEED_VERSION_KEY, String(SEED_VERSION))
-    } catch {
-      /* storage unavailable — the in-memory seed still applies */
-    }
-    return base
-  }
+export function mutate(_fn:(draft:Database)=>void):never{throw new Error('School records require the authenticated school database. Configure the backend and sign in before writing records.')}
+export interface NewExam{term_id:string;subject_id:string;class_id:string;exam_name:string;exam_type:string;max_score:number;exam_date:string}
+export interface PaperKey{term_id:string;class_id:string;subject_id:string;exam_type:string}
+export function findPaper(database:Database,key:PaperKey){return database.exams.find(exam=>exam.term_id===key.term_id&&exam.class_id===key.class_id&&exam.subject_id===key.subject_id&&exam.exam_type===key.exam_type)}
+export type SlotInput=Omit<TimetableSlot,'_id'|'school_id'>&{_id?:string}
+export interface NewTeacher{full_name:string;email:string;employee_id:string;assigned_subject_ids:string[];permissions?:TeacherPermissionKey[]}
+function paperLabel(exam:Exam|undefined){if(!exam)return'Paper';const subject=db.subjects.find(row=>row._id===exam.subject_id);const klass=db.classes.find(row=>row._id===exam.class_id);return[subject?`${subject.name} ${subject.code}`:'Subject',klass?[klass.class_name,klass.stream_name].filter(Boolean).join(' '):'',exam.exam_type].filter(Boolean).join(' · ')}
+function markLabel(examId:string,studentId:string,score:number|'X'|'Y'|null){const student=db.students.find(row=>row._id===studentId);const exam=db.exams.find(row=>row._id===examId);const shown=score===null?'cleared':score==='X'?'X · missing':score==='Y'?'Y · irregularity':`${score}/${exam?.max_score??100}`;return`${student?.full_name??'Learner'} · ${paperLabel(exam)} — ${shown}`}
 
-  const merged: Database = { ...base }
-  for (const table of TABLES) {
-    const rows = stored[table]
-    merged[table] = Array.isArray(rows) ? (rows as never) : (base[table] as never)
-  }
-
-  // Staff recorded before permissions existed inherit the seed's grants for the
-  // same person and are read-only otherwise — a permission is never implied.
-  // Sign-in credentials are back-filled the same way: a seeded account keeps the
-  // demo password it has always had rather than being locked out by an update.
-  // A staff record the registrar added themselves has no seeded counterpart and
-  // so stays awaiting sign-up, which is exactly what it is.
-  const seededStaff = new Map(base.teachers.map((teacher) => [teacher._id, teacher]))
-  merged.teachers = merged.teachers.map((teacher) => {
-    const seeded = seededStaff.get(teacher._id)
-    return {
-      ...teacher,
-      permissions: normalisePermissions(teacher.permissions ?? seeded?.permissions ?? []),
-      password_salt: teacher.password_salt ?? seeded?.password_salt ?? null,
-      password_hash: teacher.password_hash ?? seeded?.password_hash ?? null,
-      activated_at: teacher.activated_at ?? seeded?.activated_at ?? null,
-    }
-  })
-
-  // Subjects stored before the Cambridge catalogue: the seed's rows take over by
-  // id — so every paper and lesson picks up the real syllabus code — while
-  // anything the registrar added survives as a school subject they do teach.
-  const seedSubjectIds = new Set(base.subjects.map((subject) => subject._id))
-  const storedSubjects = merged.subjects as StoredSubject[]
-  if (storedSubjects.some((subject) => typeof subject.level !== 'string')) {
-    const custom: Subject[] = storedSubjects
-      .filter((subject) => !seedSubjectIds.has(subject._id))
-      .map((subject) => ({ ...subject, level: subject.level ?? 'Custom', offered: true }))
-    merged.subjects = [...base.subjects, ...custom]
-  } else {
-    merged.subjects = storedSubjects.map((subject) => ({
-      ...subject,
-      level: subject.level ?? 'Custom',
-      offered: subject.offered ?? true,
-    }))
-  }
-
-  let seedVersion = SEED_VERSION
-  try {
-    seedVersion = Number(localStorage.getItem(SEED_VERSION_KEY) ?? '1')
-  } catch {
-    seedVersion = SEED_VERSION
-  }
-  const stale = seedVersion < SEED_VERSION
-  if (stale) {
-    // A different campus shape: Year 7–13 classes, a new roll, new papers and
-    // marks. Nothing from the old demo can be carried across without orphans
-    // (students in classes that no longer exist), so the demo is rebuilt. Any
-    // subject the registrar added to the catalogue survives: it references no
-    // class, paper or learner.
-    const added = (stored.subjects as StoredSubject[])
-      .filter((subject) => !base.subjects.some((seeded) => seeded._id === subject._id))
-      .map((subject) => ({ ...subject, level: subject.level ?? 'Custom', offered: subject.offered ?? true }))
-    const rebuilt: Database = { ...base, subjects: [...base.subjects, ...added] }
-    try {
-      localStorage.setItem(DB_KEY, JSON.stringify(rebuilt))
-      localStorage.setItem(SEED_VERSION_KEY, String(SEED_VERSION))
-    } catch {
-      /* storage unavailable — the in-memory seed still applies */
-    }
-    return rebuilt
-  }
-
-  if (migrated) {
-    try {
-      localStorage.setItem(DB_KEY, JSON.stringify(merged))
-      localStorage.setItem(SEED_VERSION_KEY, String(SEED_VERSION))
-    } catch {
-      /* ignore quota errors */
-    }
-  }
-  return merged
-}
-
-let db: Database = load()
-const listeners = new Set<() => void>()
-
-function persist() {
-  try {
-    localStorage.setItem(DB_KEY, JSON.stringify(db))
-  } catch {
-    /* a very large logo library can exceed quota — keep working in memory */
-  }
-}
-
-function commit(next: Database) {
-  db = next
-  persist()
-  listeners.forEach((listener) => listener())
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
-
-const snapshot = () => db
-
-export function useDb(): Database {
-  return useSyncExternalStore(subscribe, snapshot, snapshot)
-}
-
-export const getDb = snapshot
-
-export const uid = (prefix = 'loc') =>
-  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-
-const now = () => new Date().toISOString()
-
-/**
- * Offline capture labels. A record that is waiting to leave the device is shown
- * to a person as the thing they keyed — learner, paper, mark — never as ids.
- */
-function paperLabel(exam: Exam | undefined): string {
-  if (!exam) return 'Paper'
-  const subject = db.subjects.find((s) => s._id === exam.subject_id)
-  const klass = db.classes.find((c) => c._id === exam.class_id)
-  return [
-    subject ? `${subject.name} ${subject.code}` : 'Subject',
-    klass ? [klass.class_name, klass.stream_name].filter(Boolean).join(' ') : '',
-    exam.exam_type,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-}
-
-function markLabel(examId: string, studentId: string, score: number | 'X' | 'Y' | null): string {
-  const student = db.students.find((s) => s._id === studentId)
-  const exam = db.exams.find((e) => e._id === examId)
-  const shown =
-    score === null
-      ? 'cleared'
-      : score === 'X'
-        ? 'X · missing'
-        : score === 'Y'
-          ? 'Y · irregularity'
-          : `${score}/${exam?.max_score ?? 100}`
-  return `${student?.full_name ?? 'Learner'} · ${paperLabel(exam)} — ${shown}`
-}
-
-/** Raw tree edit. Used by term, subject and grading operations. */
-export function mutate(fn: (draft: Database) => void) {
-  const draft: Database = structuredClone(db)
-  fn(draft)
-  commit(draft)
-}
-
-export function resetDatabase() {
-  commit(seedDatabase())
-}
-
-export interface NewExam {
-  term_id: string
-  subject_id: string
-  class_id: string
-  exam_name: string
-  exam_type: string
-  max_score: number
-  exam_date: string
-}
-
-/** The four choices that identify one paper — what the Marks Entry bar picks. */
-export interface PaperKey {
-  term_id: string
-  class_id: string
-  subject_id: string
-  exam_type: string
-}
-
-/** Find the paper a selection names, if it has been recorded yet. */
-export function findPaper(db: Database, key: PaperKey): Exam | undefined {
-  return db.exams.find(
-    (exam) =>
-      exam.term_id === key.term_id &&
-      exam.class_id === key.class_id &&
-      exam.subject_id === key.subject_id &&
-      exam.exam_type === key.exam_type,
-  )
-}
-
-export type SlotInput = Omit<TimetableSlot, '_id' | 'school_id'> & { _id?: string }
-
-export interface NewTeacher {
-  full_name: string
-  email: string
-  employee_id: string
-  assigned_subject_ids: string[]
-  /** Omitted = read-only, which is how every new account starts. */
-  permissions?: TeacherPermissionKey[]
-}
-
-/**
- * Convex-shaped seam: every mutation is async and returns the affected row or { ok: true }.
- * Swapping this object for Convex client calls is the only change needed for a live backend.
- */
-export const api = {
-  marks: {
-    async setScore(examId: string, studentId: string, score: number | 'X' | 'Y' | null): Promise<Mark> {
-      let result: Mark | undefined
-      mutate((draft) => {
-        const existing = draft.marks.find((m) => m.exam_id === examId && m.student_id === studentId)
-        if (existing) {
-          existing.score = score
-          existing.updated_at = now()
-          result = existing
-        } else {
-          const created: Mark = {
-            _id: uid('m'),
-            exam_id: examId,
-            student_id: studentId,
-            score,
-            remarks: '',
-            updated_at: now(),
-            entered_by: 'IUPC staff',
-          }
-          draft.marks.push(created)
-          result = created
-        }
-      })
-      enqueueWrite('marks.setScore', markLabel(examId, studentId, score), { examId, studentId, score })
-      return result as Mark
-    },
-    async setRemarks(examId: string, studentId: string, remarks: string) {
-      mutate((draft) => {
-        const existing = draft.marks.find((m) => m.exam_id === examId && m.student_id === studentId)
-        if (existing) existing.remarks = remarks
-      })
-      enqueueWrite('marks.setRemarks', markLabel(examId, studentId, null), { examId, studentId, remarks })
-      return { ok: true as const }
-    },
-  },
-
-  /**
-   * Papers are identified by what a teacher picks on the Marks Entry page —
-   * term, class, subject and paper type — so there is nothing to create up
-   * front. `ensure` returns the paper that already matches, or records it the
-   * first time a result is keyed in, which is the only moment a paper exists.
-   */
-  exams: {
-    async ensure(input: NewExam): Promise<Exam> {
-      const existing = findPaper(db, input)
-      if (existing) return existing
-      const exam: Exam = {
-        _id: uid('ex'),
-        status: 'open',
-        editing_deadline: null,
-        ...input,
-      }
-      mutate((draft) => {
-        draft.exams.push(exam)
-      })
-      // A paper keyed offline is created from the same first result that creates
-      // it online, so the record and its paper leave the device together.
-      enqueueWrite('exams.ensure', paperLabel(exam), { ...input })
-      return exam
-    },
-    /** The total a paper is marked out of — percentages are read from it. */
-    async setMaxScore(examId: string, maxScore: number) {
-      mutate((draft) => {
-        const exam = draft.exams.find((e) => e._id === examId)
-        if (exam && maxScore > 0) exam.max_score = maxScore
-      })
-      enqueueWrite('exams.setMaxScore', `${paperLabel(db.exams.find((e) => e._id === examId))} — out of ${maxScore}`, {
-        examId,
-        maxScore,
-      })
-      return { ok: true as const }
-    },
-  },
-
-  /** The bell schedule is one row per school: the timetable page edits it. */
-  bell: {
-    async save(schedule: BellSchedule) {
-      mutate((draft) => {
-        const index = draft.bellSchedules.findIndex((row) => row._id === schedule._id)
-        const next: BellSchedule = { ...schedule, updated_at: now() }
-        if (index >= 0) draft.bellSchedules[index] = next
-        else draft.bellSchedules.push(next)
-      })
-      return { ok: true as const }
-    },
-  },
-
-  timetable: {
-    async save(input: SlotInput): Promise<TimetableSlot> {
-      let result: TimetableSlot | undefined
-      mutate((draft) => {
-        if (input._id) {
-          const index = draft.timetableSlots.findIndex((s) => s._id === input._id)
-          if (index >= 0) {
-            draft.timetableSlots[index] = { ...draft.timetableSlots[index], ...input, _id: input._id }
-            result = draft.timetableSlots[index]
-            return
-          }
-        }
-        const created: TimetableSlot = { ...input, _id: uid('ts'), school_id: SCHOOL_ID }
-        draft.timetableSlots.push(created)
-        result = created
-      })
-      return result as TimetableSlot
-    },
-    async remove(slotId: string) {
-      mutate((draft) => {
-        draft.timetableSlots = draft.timetableSlots.filter((s) => s._id !== slotId)
-      })
-      return { ok: true as const }
-    },
+export const api={
+  marks:{
     /**
-     * One storage write for a drag: a move is a single cell, a swap is two, and
-     * both must land together so the board never shows a half-applied drop.
+     * Record one score. The request UUID is minted and stored before anything
+     * is sent, so a retry after a lost answer can be matched to its receipt
+     * instead of writing the mark a second time. The promise resolves with what
+     * actually happened: only `Accepted` means the school has the mark.
      */
-    async move(updates: { _id: string; class_id: string; day: number; period: number }[]) {
-      mutate((draft) => {
-        for (const update of updates) {
-          const slot = draft.timetableSlots.find((s) => s._id === update._id)
-          if (!slot) continue
-          slot.class_id = update.class_id
-          slot.day = update.day
-          slot.period = update.period
-        }
-      })
-      return { ok: true as const }
+    async setScore(examId:string,studentId:string,score:number|'X'|'Y'|null,teacherId?:string|null):Promise<SubmitOutcome>{
+      if(!supabaseConfigured||!supabase)fail('Marks require the authenticated school database. Sign in to record them.')
+      const{schoolId}=active(true)
+      const{data}=await supabase.auth.getSession()
+      const userId=data.session?.user.id
+      if(!userId||userId!==getAccountScope()?.userId||!data.session?.expires_at||data.session.expires_at*1000<=Date.now())fail('Sign in to record marks.')
+      const outcome=await submitMarkScore(
+        {examId,studentId,score},
+        {actor:{userId,schoolId},teacherId:teacherId??null,summary:markLabel(examId,studentId,score)},
+      )
+      if(outcome.persisted&&outcome.state==='Accepted')await refreshActiveDatabase()
+      return outcome
     },
+    async setRemarks(examId:string,studentId:string,remarks:string){if(supabaseConfigured){if(typeof navigator!=='undefined'&&!navigator.onLine)fail('Remarks can only be saved while connected to the school database.');const{client}=active();const{data,error}=await client.from('marks').update({remarks}).eq('exam_id',examId).eq('student_id',studentId).select('id').maybeSingle();if(error||!data)fail('Mark remarks could not be saved.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const mark=draft.marks.find(row=>row.exam_id===examId&&row.student_id===studentId);if(mark)mark.remarks=remarks});enqueueWrite('marks.setRemarks',markLabel(examId,studentId,null),{examId,studentId,remarks});return{ok:true as const}},
   },
-
-  notes: {
-    async create(studentId: string, body: string, authorName: string): Promise<Note> {
-      const note: Note = { _id: uid('n'), student_id: studentId, body, author_name: authorName, created_at: now() }
-      mutate((draft) => {
-        draft.notes.push(note)
-      })
-      return note
-    },
-    async remove(noteId: string) {
-      mutate((draft) => {
-        draft.notes = draft.notes.filter((n) => n._id !== noteId)
-      })
-      return { ok: true as const }
-    },
+  exams:{
+    async ensure(input:NewExam):Promise<Exam>{if(supabaseConfigured){const{client,schoolId}=active();const{data:existing,error}=await client.from('exams').select('*').eq('school_id',schoolId).eq('term_id',input.term_id).eq('class_id',input.class_id).eq('subject_id',input.subject_id).eq('exam_type',input.exam_type).maybeSingle();if(error)fail('Paper could not be loaded.');const row=existing??await insert('exams',{...input,status:'open'});await refreshActiveDatabase();return{_id:row.id,term_id:row.term_id,subject_id:row.subject_id,class_id:row.class_id,exam_name:row.exam_name,exam_type:row.exam_type,max_score:Number(row.max_score),exam_date:row.exam_date,editing_deadline:row.editing_deadline,status:row.status}}const existing=findPaper(db,input);if(existing)return existing;const exam:Exam={_id:uid('ex'),status:'open',editing_deadline:null,...input};mutate(draft=>{draft.exams.push(exam)});enqueueWrite('exams.ensure',paperLabel(exam),{...input});return exam},
+    async setMaxScore(examId:string,maxScore:number){if(!(maxScore>0))fail('Maximum score must be greater than zero.');if(supabaseConfigured){await update('exams',examId,{max_score:maxScore});await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const exam=draft.exams.find(row=>row._id===examId);if(exam)exam.max_score=maxScore});enqueueWrite('exams.setMaxScore',`${paperLabel(db.exams.find(row=>row._id===examId))} — out of ${maxScore}`,{examId,maxScore});return{ok:true as const}},
   },
-
-  reportCards: {
-    async upsert(studentId: string, termId: string, patch: Partial<ReportCard>): Promise<ReportCard> {
-      let result: ReportCard | undefined
-      mutate((draft) => {
-        const existing = draft.reportCards.find((r) => r.student_id === studentId && r.term_id === termId)
-        if (existing) {
-          Object.assign(existing, patch, { updated_at: now() })
-          result = existing
-        } else {
-          const created: ReportCard = {
-            _id: uid('rc'),
-            student_id: studentId,
-            term_id: termId,
-            attendance_present: 0,
-            attendance_total: 0,
-            class_teacher: '',
-            academic: '',
-            activities: '',
-            conduct: '',
-            principal: '',
-            hse: '',
-            next_term_begins: '',
-            next_term_ends: '',
-            updated_at: now(),
-            ...patch,
-          }
-          draft.reportCards.push(created)
-          result = created
-        }
-      })
-      const learner = db.students.find((s) => s._id === studentId)
-      enqueueWrite('reportCards.upsert', `Report card · ${learner?.full_name ?? 'Learner'}`, {
-        studentId,
-        termId,
-        patch,
-      })
-      return result as ReportCard
-    },
+  bell:{async save(schedule:BellSchedule){if(supabaseConfigured){const row=await save('bell_schedules',{entries:schedule.entries,updated_at:now()},'school_id');await refreshActiveDatabase();return row}mutate(draft=>{const index=draft.bellSchedules.findIndex(row=>row._id===schedule._id);const value={...schedule,updated_at:now()};if(index>=0)draft.bellSchedules[index]=value;else draft.bellSchedules.push(value)});return{ok:true as const}}},
+  timetable:{
+    async save(input:SlotInput):Promise<TimetableSlot>{if(supabaseConfigured){const values={term_id:input.term_id,class_id:input.class_id,day:input.day,period:input.period,subject_id:input.subject_id,teacher_id:input.teacher_id,room:input.room,week:input.week};const row=input._id?await update('timetable_slots',input._id,values):await insert('timetable_slots',values);await refreshActiveDatabase();return{_id:row.id,school_id:row.school_id,...values}}let result!:TimetableSlot;mutate(draft=>{if(input._id){const index=draft.timetableSlots.findIndex(row=>row._id===input._id);if(index>=0){draft.timetableSlots[index]={...draft.timetableSlots[index],...input,_id:input._id};result=draft.timetableSlots[index];return}}result={...input,_id:uid('ts'),school_id:schoolIdForWrite()};draft.timetableSlots.push(result)});return result},
+    async remove(slotId:string){if(supabaseConfigured){await remove('timetable_slots',slotId);await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{draft.timetableSlots=draft.timetableSlots.filter(row=>row._id!==slotId)});return{ok:true as const}},
+    async move(updates:{_id:string;class_id:string;day:number;period:number}[]){if(supabaseConfigured){const{client}=active();const{error}=await client.rpc('move_timetable_slots',{updates:updates.map(({_id,...rest})=>({id:_id,...rest}))});if(error)fail('Timetable update failed.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{for(const change of updates){const row=draft.timetableSlots.find(slot=>slot._id===change._id);if(row){row.class_id=change.class_id;row.day=change.day;row.period=change.period}}});return{ok:true as const}},
   },
-
-  subjects: {
-    async create(name: string, code: string, category: string, level: SubjectLevel): Promise<Subject> {
-      const subject: Subject = { _id: uid('sub'), school_id: SCHOOL_ID, name, code, category, level, offered: true }
-      mutate((draft) => {
-        draft.subjects.push(subject)
-      })
-      return subject
-    },
-    /** Adds a catalogue subject to what the campus teaches, or withdraws it. */
-    async setOffered(subjectId: string, offered: boolean) {
-      mutate((draft) => {
-        const subject = draft.subjects.find((s) => s._id === subjectId)
-        if (subject) subject.offered = offered
-      })
-      return { ok: true as const }
-    },
-    async remove(subjectId: string) {
-      mutate((draft) => {
-        draft.subjects = draft.subjects.filter((s) => s._id !== subjectId)
-      })
-      return { ok: true as const }
-    },
+  notes:{
+    async create(studentId:string,body:string,authorName:string):Promise<Note>{if(supabaseConfigured){const{client}=active();const{data:user}=await client.auth.getUser();if(!user.user)fail('Sign in to save a note.');const row=await insert('student_notes',{student_id:studentId,body:body.trim(),author_id:user.user.id,author_name:authorName});await refreshActiveDatabase();return{_id:row.id,student_id:row.student_id,body:row.body,author_name:row.author_name,created_at:row.created_at}}const note={_id:uid('n'),student_id:studentId,body,author_name:authorName,created_at:now()};mutate(draft=>{draft.notes.push(note)});return note},
+    async remove(noteId:string){if(supabaseConfigured){await remove('student_notes',noteId);await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{draft.notes=draft.notes.filter(row=>row._id!==noteId)});return{ok:true as const}},
   },
-
-  terms: {
-    async create(name: string, academicYear: string, startDate: string): Promise<Term> {
-      const term: Term = { _id: uid('term'), school_id: SCHOOL_ID, name, academic_year: academicYear, is_active: false, start_date: startDate }
-      mutate((draft) => {
-        draft.terms.push(term)
-      })
-      return term
-    },
-    async activate(termId: string) {
-      mutate((draft) => {
-        draft.terms.forEach((t) => {
-          t.is_active = t._id === termId
-        })
-      })
-      return { ok: true as const }
-    },
+  reportCards:{async upsert(studentId:string,termId:string,patch:Partial<ReportCard>):Promise<ReportCard>{if(supabaseConfigured){const values={student_id:studentId,term_id:termId,attendance_present:patch.attendance_present??0,attendance_total:patch.attendance_total??0,class_teacher:patch.class_teacher??'',academic:patch.academic??'',activities:patch.activities??'',conduct:patch.conduct??'',principal:patch.principal??'',hse:patch.hse??'',next_term_begins:patch.next_term_begins||null,next_term_ends:patch.next_term_ends||null};const row=await save('report_cards',values,'student_id,term_id');await refreshActiveDatabase();return{_id:row.id,...values,next_term_begins:values.next_term_begins??'',next_term_ends:values.next_term_ends??'',updated_at:row.updated_at}}let result!:ReportCard;mutate(draft=>{const existing=draft.reportCards.find(row=>row.student_id===studentId&&row.term_id===termId);if(existing){Object.assign(existing,patch,{updated_at:now()});result=existing}else{result={_id:uid('rc'),student_id:studentId,term_id:termId,attendance_present:0,attendance_total:0,class_teacher:'',academic:'',activities:'',conduct:'',principal:'',hse:'',next_term_begins:'',next_term_ends:'',updated_at:now(),...patch};draft.reportCards.push(result)}});enqueueWrite('reportCards.upsert',`Report card · ${db.students.find(row=>row._id===studentId)?.full_name??'Learner'}`,{studentId,termId,patch});return result}},
+  subjects:{
+    async create(name:string,code:string,category:string,level:SubjectLevel):Promise<Subject>{if(supabaseConfigured){const row=await insert('subjects',{name:name.trim(),code:code.trim(),category,level,offered:true});await refreshActiveDatabase();return{_id:row.id,school_id:row.school_id,name:row.name,code:row.code,category:row.category,level:row.level,offered:row.offered}}const subject:Subject={_id:uid('sub'),school_id:schoolIdForWrite(),name,code,category,level,offered:true};mutate(draft=>{draft.subjects.push(subject)});return subject},
+    async setOffered(subjectId:string,offered:boolean){if(supabaseConfigured){active();const{data:subject,error:lookupError}=await supabase!.from('subjects').select('id,school_id').eq('id',subjectId).maybeSingle();if(lookupError||!subject)fail('Subject could not be found.');if(subject.school_id===null){if(!offered)fail('A catalogue subject has no school offering to withdraw.');const{data:newId,error}=await supabase!.rpc('set_subject_offered',{target_school:getActiveSchoolId(),target_subject:subjectId,is_offered:true});if(error||!newId)fail('Subject could not be offered.');}else await update('subjects',subjectId,{offered});await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const subject=draft.subjects.find(row=>row._id===subjectId);if(subject)subject.offered=offered});return{ok:true as const}},
+    async remove(subjectId:string){if(supabaseConfigured){active();const{data:subject,error:lookupError}=await supabase!.from('subjects').select('id,school_id').eq('id',subjectId).maybeSingle();if(lookupError||!subject)fail('Subject could not be found.');if(subject.school_id===null)fail('The shared curriculum catalogue cannot be deleted.');await remove('subjects',subjectId);await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{draft.subjects=draft.subjects.filter(row=>row._id!==subjectId)});return{ok:true as const}},
   },
-
-  students: {
-    async create(input: Omit<Student, '_id' | 'school_id'>): Promise<Student> {
-      const student: Student = { ...input, _id: uid('s'), school_id: SCHOOL_ID }
-      mutate((draft) => {
-        draft.students.push(student)
-      })
-      return student
-    },
-    async update(studentId: string, patch: Partial<Student>) {
-      mutate((draft) => {
-        const student = draft.students.find((s) => s._id === studentId)
-        if (student) Object.assign(student, patch)
-      })
-      return { ok: true as const }
-    },
+  terms:{
+    async create(name:string,academicYear:string,startDate:string):Promise<Term>{if(supabaseConfigured){const row=await insert('terms',{name,academic_year:academicYear,start_date:startDate,is_active:false});await refreshActiveDatabase();return{_id:row.id,school_id:row.school_id,name:row.name,academic_year:row.academic_year,is_active:row.is_active,start_date:row.start_date}}const term:Term={_id:uid('term'),school_id:schoolIdForWrite(),name,academic_year:academicYear,is_active:false,start_date:startDate};mutate(draft=>{draft.terms.push(term)});return term},
+    async activate(termId:string){if(supabaseConfigured){active();const{error}=await supabase!.rpc('activate_term',{target_term:termId});if(error)fail('Term activation failed.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{draft.terms.forEach(term=>{term.is_active=term._id===termId})});return{ok:true as const}},
   },
-
-  teachers: {
-    async create(input: NewTeacher): Promise<Teacher> {
-      const teacher: Teacher = {
-        _id: uid('t'),
-        school_id: SCHOOL_ID,
-        full_name: input.full_name.trim(),
-        email: input.email.trim().toLowerCase(),
-        employee_id: input.employee_id.trim(),
-        assigned_subject_ids: [...input.assigned_subject_ids],
-        permissions: normalisePermissions(input.permissions ?? []),
-        initials: initialsOf(input.full_name),
-      }
-      mutate((draft) => {
-        draft.teachers.push(teacher)
-      })
-      return teacher
-    },
-    async update(teacherId: string, patch: Partial<NewTeacher>) {
-      mutate((draft) => {
-        const teacher = draft.teachers.find((t) => t._id === teacherId)
-        if (!teacher) return
-        if (patch.full_name !== undefined) {
-          teacher.full_name = patch.full_name.trim()
-          teacher.initials = initialsOf(teacher.full_name)
-        }
-        if (patch.email !== undefined) teacher.email = patch.email.trim().toLowerCase()
-        if (patch.employee_id !== undefined) teacher.employee_id = patch.employee_id.trim()
-        if (patch.assigned_subject_ids) teacher.assigned_subject_ids = [...patch.assigned_subject_ids]
-        if (patch.permissions) teacher.permissions = normalisePermissions(patch.permissions)
-      })
-      return { ok: true as const }
-    },
-    async toggleSubject(teacherId: string, subjectId: string) {
-      mutate((draft) => {
-        const teacher = draft.teachers.find((t) => t._id === teacherId)
-        if (!teacher) return
-        teacher.assigned_subject_ids = teacher.assigned_subject_ids.includes(subjectId)
-          ? teacher.assigned_subject_ids.filter((id) => id !== subjectId)
-          : [...teacher.assigned_subject_ids, subjectId]
-      })
-      return { ok: true as const }
-    },
-    /** Replaces the whole permission set — the panel toggles one key at a time. */
-    async setPermissions(teacherId: string, keys: TeacherPermissionKey[]) {
-      mutate((draft) => {
-        const teacher = draft.teachers.find((t) => t._id === teacherId)
-        if (teacher) teacher.permissions = normalisePermissions(keys)
-      })
-      return { ok: true as const }
-    },
-    async togglePermission(teacherId: string, key: TeacherPermissionKey) {
-      mutate((draft) => {
-        const teacher = draft.teachers.find((t) => t._id === teacherId)
-        if (!teacher) return
-        const next = teacher.permissions.includes(key)
-          ? teacher.permissions.filter((entry) => entry !== key)
-          : [...teacher.permissions, key]
-        teacher.permissions = normalisePermissions(next)
-      })
-      return { ok: true as const }
-    },
-    /**
-     * The teacher's own sign-in credential, written once during sign-up from the
-     * password they chose. Passing null clears it, which puts the account back to
-     * awaiting sign-up so a teacher who forgot their password can set a new one.
-     */
-    async setPassword(teacherId: string, credentials: { salt: string; hash: string } | null) {
-      mutate((draft) => {
-        const teacher = draft.teachers.find((t) => t._id === teacherId)
-        if (!teacher) return
-        teacher.password_salt = credentials?.salt ?? null
-        teacher.password_hash = credentials?.hash ?? null
-        teacher.activated_at = credentials ? now() : null
-      })
-      return { ok: true as const }
-    },
-
-    /** Refused while the staff member still holds lessons on the timetable. */
-    async remove(teacherId: string) {
-      const lessons = db.timetableSlots.filter((slot) => slot.teacher_id === teacherId).length
-      if (lessons > 0) {
-        return {
-          ok: false as const,
-          reason: `${lessons} timetable lesson${lessons === 1 ? '' : 's'} are still assigned to this teacher. Reassign them before removing the record.`,
-        }
-      }
-      mutate((draft) => {
-        draft.teachers = draft.teachers.filter((t) => t._id !== teacherId)
-      })
-      return { ok: true as const }
-    },
+  students:{
+    async create(input:Omit<Student,'_id'|'school_id'|'archived'|'archived_at'>):Promise<Student>{const admissionError=validateAdmissionNumber(input.admission_number,db.students);if(admissionError)fail(admissionError);if(supabaseConfigured){const{client,schoolId}=active();const{data:id,error}=await client.rpc('save_student',{input_row:{school_id:schoolId,admission_number:input.admission_number,full_name:input.full_name,gender:input.gender,date_of_birth:input.date_of_birth||null,class_id:input.class_id,guardian_name:input.guardian_name,guardian_phone:input.guardian_phone,status:input.status},subject_ids:input.subject_ids??[]});if(error||!id)fail('Student record could not be saved. Check administrator access and the entered values.');await refreshActiveDatabase();const saved=db.students.find(row=>row._id===id);if(!saved)fail('Student record could not be reloaded.');return saved}const student={...input,archived:false,archived_at:null,_id:uid('s'),school_id:schoolIdForWrite()};mutate(draft=>{draft.students.push(student)});return student},
+    async update(studentId:string,patch:Partial<Student>){if(supabaseConfigured){const{schoolId}=active();const existing=db.students.find(row=>row._id===studentId);if(!existing)fail('Student record not found.');const values={...existing,...patch,_id:undefined,school_id:schoolId} as Record<string,unknown>;delete values._id;const{data:id,error}=await supabase!.rpc('update_student',{input_row:{...values,id:studentId},subject_ids:patch.subject_ids??existing.subject_ids??[]});if(error||!id)fail('Student update was not saved. Check administrator access and the entered values.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.students.find(student=>student._id===studentId);if(row)Object.assign(row,patch)});return{ok:true as const}},
+    async archive(studentId:string){if(supabaseConfigured){active();const{data,error}=await supabase!.rpc('archive_student',{target_student:studentId});if(error)fail('Student could not be archived. Check administrator access.');if(data!==true)fail('Student is already archived or the archive transition did not occur.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.students.find(student=>student._id===studentId);if(row&&!row.archived){row.archived=true;row.archived_at=now()}});return{ok:true as const}},
+    async reactivate(studentId:string){if(supabaseConfigured){active();const{data,error}=await supabase!.rpc('reactivate_student',{target_student:studentId});if(error)fail('Student could not be reactivated. Check administrator access.');if(data!==true)fail('Student is already active or the reactivation transition did not occur.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.students.find(student=>student._id===studentId);if(row&&row.archived){row.archived=false;row.archived_at=null}});return{ok:true as const}},
   },
-
-  /** One row per school: the registrar's deadline for papers without their own. */
-  markWindow: {
-    async save(closesAt: string | null) {
-      mutate((draft) => {
-        const existing = draft.markWindows[0]
-        if (existing) {
-          existing.closes_at = closesAt
-          existing.updated_at = now()
-          return
-        }
-        draft.markWindows.push({
-          _id: uid('mw'),
-          school_id: SCHOOL_ID,
-          closes_at: closesAt,
-          updated_at: now(),
-        })
-      })
-      return { ok: true as const }
-    },
+  teachers:{
+    async create(input:NewTeacher):Promise<Teacher>{if(supabaseConfigured){const{schoolId}=active();const{data:id,error}=await supabase!.rpc('save_teacher',{target_teacher:null,target_school:schoolId,teacher_data:{full_name:input.full_name.trim(),email:input.email.trim().toLowerCase(),employee_id:input.employee_id.trim()},subjects:input.assigned_subject_ids,classes:[],permissions:input.permissions??[]});if(error||!id)fail('Staff record could not be created.');await refreshActiveDatabase();const row=db.teachers.find(teacher=>teacher._id===id);if(!row)fail('Staff record could not be reloaded.');return row}const teacher:Teacher={_id:uid('t'),school_id:schoolIdForWrite(),full_name:input.full_name.trim(),email:input.email.trim().toLowerCase(),employee_id:input.employee_id.trim(),assigned_subject_ids:[...input.assigned_subject_ids],permissions:normalisePermissions(input.permissions??[]),initials:initialsOf(input.full_name)};mutate(draft=>{draft.teachers.push(teacher)});return teacher},
+    async update(teacherId:string,patch:Partial<NewTeacher>){if(supabaseConfigured){const{schoolId}=active();const existing=db.teachers.find(row=>row._id===teacherId);if(!existing)fail('Staff record not found.');const values={full_name:patch.full_name??existing.full_name,email:patch.email??existing.email,employee_id:patch.employee_id??existing.employee_id};const{error}=await supabase!.rpc('save_teacher',{target_teacher:teacherId,target_school:schoolId,teacher_data:values,subjects:patch.assigned_subject_ids??existing.assigned_subject_ids,classes:[],permissions:patch.permissions??existing.permissions});if(error)fail('Staff update was not saved; review the assignments and permissions.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const teacher=draft.teachers.find(row=>row._id===teacherId);if(!teacher)return;if(patch.full_name!==undefined){teacher.full_name=patch.full_name.trim();teacher.initials=initialsOf(teacher.full_name)}if(patch.email!==undefined)teacher.email=patch.email.trim().toLowerCase();if(patch.employee_id!==undefined)teacher.employee_id=patch.employee_id.trim();if(patch.assigned_subject_ids)teacher.assigned_subject_ids=[...patch.assigned_subject_ids];if(patch.permissions)teacher.permissions=normalisePermissions(patch.permissions)});return{ok:true as const}},
+    async toggleSubject(teacherId:string,subjectId:string){const teacher=db.teachers.find(row=>row._id===teacherId);if(!teacher)fail('Staff record not found.');const next=teacher.assigned_subject_ids.includes(subjectId)?teacher.assigned_subject_ids.filter(id=>id!==subjectId):[...teacher.assigned_subject_ids,subjectId];return api.teachers.update(teacherId,{assigned_subject_ids:next})},
+    async setPermissions(teacherId:string,keys:TeacherPermissionKey[]){if(supabaseConfigured){const{client}=active();const{error}=await client.rpc('set_teacher_permissions',{target_teacher:teacherId,permission_keys:keys});if(error)fail('Permission update failed.');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const teacher=draft.teachers.find(row=>row._id===teacherId);if(teacher)teacher.permissions=normalisePermissions(keys)});return{ok:true as const}},
+    async togglePermission(teacherId:string,key:TeacherPermissionKey){const teacher=db.teachers.find(row=>row._id===teacherId);if(!teacher)fail('Staff record not found.');const next=teacher.permissions.includes(key)?teacher.permissions.filter(item=>item!==key):[...teacher.permissions,key];return api.teachers.setPermissions(teacherId,next)},
+    async setPassword(teacherId:string,credentials:{salt:string;hash:string}|null){if(supabaseConfigured)fail('Use an administrator invitation or account recovery; browser-managed passwords are prohibited.');mutate(draft=>{const teacher=draft.teachers.find(row=>row._id===teacherId);if(teacher){teacher.password_salt=credentials?.salt??null;teacher.password_hash=credentials?.hash??null;teacher.activated_at=credentials?now():null}});return{ok:true as const}},
+    async remove(teacherId:string){if(supabaseConfigured){const{schoolId}=active();const teacher=db.teachers.find(row=>row._id===teacherId);if(!teacher)fail('Staff record not found.');const{data:membership}=await supabase!.from('memberships').select('user_id').eq('teacher_id',teacherId).eq('school_id',schoolId).maybeSingle();const{error}=await supabase!.rpc('deactivate_teacher',{target_teacher:teacherId});if(error)fail('Teacher account could not be deactivated.');if(membership?.user_id)await supabase!.rpc('update_membership_active',{target_user:membership.user_id,target_school:schoolId,is_active:false});await refreshActiveDatabase();return{ok:true as const}}const lessons=db.timetableSlots.filter(slot=>slot.teacher_id===teacherId).length;if(lessons)return{ok:false as const,reason:`${lessons} timetable lesson${lessons===1?'':'s'} are still assigned to this teacher. Reassign them before removing the record.`};mutate(draft=>{draft.teachers=draft.teachers.filter(row=>row._id!==teacherId)});return{ok:true as const}},
   },
-
-  classes: {
-    async create(classRow: Omit<ClassRow, '_id' | 'school_id'>): Promise<ClassRow> {
-      const created: ClassRow = { ...classRow, _id: uid('c'), school_id: SCHOOL_ID }
-      mutate((draft) => {
-        draft.classes.push(created)
-      })
-      return created
-    },
-  },
-
-  gradingScales: {
-    async save(scale: GradingScale) {
-      mutate((draft) => {
-        const index = draft.gradingScales.findIndex((s) => s._id === scale._id)
-        if (index >= 0) draft.gradingScales[index] = scale
-        else draft.gradingScales.push(scale)
-      })
-      return { ok: true as const }
-    },
+  markWindow:{async save(closesAt:string|null){if(supabaseConfigured){await save('mark_windows',{closes_at:closesAt,updated_at:now()},'school_id');await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.markWindows[0];if(row){row.closes_at=closesAt;row.updated_at=now()}else draft.markWindows.push({_id:uid('mw'),school_id:schoolIdForWrite(),closes_at:closesAt,updated_at:now()})});return{ok:true as const}}},
+  classes:{async create(input:Omit<ClassRow,'_id'|'school_id'>):Promise<ClassRow>{if(supabaseConfigured){const row=await insert('classes',input);await refreshActiveDatabase();return{_id:row.id,school_id:row.school_id,class_name:row.class_name,stream_name:row.stream_name,class_teacher_id:row.class_teacher_id??null}}const row={...input,_id:uid('c'),school_id:schoolIdForWrite()};mutate(draft=>{draft.classes.push(row)});return row},async setClassTeacher(classId:string,teacherId:string|null){if(supabaseConfigured){await update('classes',classId,{class_teacher_id:teacherId});await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.classes.find(item=>item._id===classId);if(row)row.class_teacher_id=teacherId});return{ok:true as const}}},
+  schools:{async setPrincipalName(principalName:string){if(supabaseConfigured){const{schoolId}=active();await update('schools',schoolId,{principal_name:principalName.trim()});await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const row=draft.schools[0];if(row)row.principal_name=principalName.trim()});return{ok:true as const}}},
+  gradingScales:{async save(scale:GradingScale){if(supabaseConfigured){const values={name:scale.name,pass_mark:scale.pass_mark,bands:scale.bands};if(db.gradingScales.some(row=>row._id===scale._id))await update('grading_scales',scale._id,values);else await insert('grading_scales',values);await refreshActiveDatabase();return{ok:true as const}}mutate(draft=>{const index=draft.gradingScales.findIndex(row=>row._id===scale._id);if(index>=0)draft.gradingScales[index]=scale;else draft.gradingScales.push(scale)});return{ok:true as const}},
   },
 }
