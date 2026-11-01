@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { AlertTriangle, Check, Loader2, Lock, Printer, X } from 'lucide-react'
+import { Check, Loader2, Lock, Printer, X } from 'lucide-react'
 import { api, findPaper, useDb } from '../data/db'
 import { useQueueRecords, type SubmitOutcome } from '../lib/offline'
 import { useSession } from '../session'
@@ -10,6 +10,8 @@ import { formatDate, formatDateTime, todayIso } from '../lib/format'
 import { usePrintPage } from '../lib/print'
 import type { Database, ID, Student } from '../data/types'
 import { isOperationalStudent } from '../data/student-lifecycle'
+import { SubjectCombobox } from '../components/SubjectCombobox'
+import './MarksEntry.css'
 
 /** The five papers this campus sets, in the order a term runs them. */
 const EXAM_TYPES = ['CAT 1', 'CAT 2', 'Midterm', 'Endterm', 'Pre-Mock'] as const
@@ -120,7 +122,6 @@ export default function MarksEntry() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId])
 
-  const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('adm')
   const [outOf, setOutOf] = useState('100')
 
@@ -177,6 +178,10 @@ export default function MarksEntry() {
   const [drafts, setDrafts] = useState<Record<string, string>>(initialDrafts)
   const [flash, setFlash] = useState<Record<string, Flash>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [activeStudent, setActiveStudent] = useState<string | null>(null)
+  const saving = useRef(new Map<string, Promise<boolean>>())
+  const advancing = useRef(new Set<string>())
+  const workspace = useRef<HTMLDivElement>(null)
   const inputs = useRef<Record<string, HTMLInputElement | null>>({})
   const queued = useQueueRecords().filter(entry => !entry.locked && entry.payload.examId === paper?._id)
   const queueKey = JSON.stringify(queued.map(entry => [entry.id, entry.state, entry.payload, entry.last_error]))
@@ -204,8 +209,34 @@ export default function MarksEntry() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionKey, queueKey])
 
-  const eligibleRoster = roster.filter((student) => verifiedEnrolledIn(student, picked.term_id, picked.subject_id))
-  const blockedEnrollmentCount = roster.length - eligibleRoster.length
+  const eligibleRoster = subject ? roster.filter((student) => verifiedEnrolledIn(student, picked.term_id, picked.subject_id)) : []
+  // Measure the existing school navigation rather than assuming a header height.
+  // The inner table header also clears the context when the outer page scrolls.
+  useEffect(() => {
+    const root = workspace.current
+    const header = document.querySelector('.workspace-header')
+    const context = root?.querySelector('.marks-context')
+    if (!root || !header || !context) return
+    let frame = 0
+    const measure = () => {
+      root.style.setProperty('--marks-nav-height', `${header.getBoundingClientRect().height}px`)
+      const scroller = root.querySelector('.marks-table-scroll')
+      const offset = window.innerWidth >= 1024 && scroller
+        ? Math.max(0, context.getBoundingClientRect().bottom - scroller.getBoundingClientRect().top) : 0
+      root.style.setProperty('--marks-head-offset', `${offset}px`)
+    }
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure) }
+    const observer = new ResizeObserver(schedule)
+    observer.observe(header); observer.observe(context)
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    measure()
+    return () => {
+      observer.disconnect(); cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule)
+    }
+  }, [selectionKey, eligibleRoster.length, subjects.length])
+  const unresolvedRoster = roster.filter(student => student.enrollment_term_id !== picked.term_id || !['verified_enrolled', 'verified_no_enrollments'].includes(student.enrollment_certainty ?? '') || (student.enrollment_certainty === 'verified_enrolled' && (!student.subject_ids?.length || new Set(student.subject_ids).size !== student.subject_ids.length || student.subject_ids.some(id => typeof id !== 'string' || !id.trim()))))
   const entered = eligibleRoster.filter((student) => {
     const mark = markFor(student._id)
     return mark && mark.score !== null
@@ -229,7 +260,21 @@ export default function MarksEntry() {
     return created._id
   }
 
-  async function persist(studentId: string) {
+  // Coalesce Enter/blur while the same row is saving; never submit twice in flight.
+  function persist(studentId: string): Promise<boolean> {
+    const saveKey = `${selectionKey}|${studentId}|${drafts[studentId] ?? ''}`
+    const pending = saving.current.get(saveKey)
+    if (pending) return pending
+    const task = persistResult(studentId).catch(() => {
+      setErrors(current => ({ ...current, [studentId]: 'Could not save. Check the connection and retry.' }))
+      setFlash(current => ({ ...current, [studentId]: 'error' }))
+      return false
+    }).finally(() => saving.current.delete(saveKey))
+    saving.current.set(saveKey, task)
+    return task
+  }
+
+  async function persistResult(studentId: string) {
     const raw = drafts[studentId] ?? ''
     const parsed = parseScoreInput(raw, maxScore)
     if (!parsed.ok) {
@@ -292,9 +337,12 @@ export default function MarksEntry() {
   }
 
   function focusOffset(studentId: string, offset: number) {
-    const index = roster.findIndex((student) => student._id === studentId)
-    const next = roster[index + offset]
-    if (next) inputs.current[next._id]?.focus()
+    const index = eligibleRoster.findIndex((student) => student._id === studentId)
+    const next = eligibleRoster[index + offset]
+    if (next) {
+      inputs.current[next._id]?.focus({ preventScroll: true })
+      inputs.current[next._id]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
   }
 
   const gradeForDraft = (studentId: string) => {
@@ -377,13 +425,27 @@ export default function MarksEntry() {
     }
   }
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return subjects
-    return subjects.filter((entry) =>
-      `${entry.name} ${entry.code} ${entry.category} ${entry.level}`.toLowerCase().includes(needle),
-    )
-  }, [subjects, query])
+  function hasUnsavedInput(studentId: string) {
+    const local = queued.find(entry => entry.payload.studentId === studentId)
+    const recorded = local ? local.payload.score : markFor(studentId)?.score ?? null
+    const parsed = parseScoreInput(drafts[studentId] ?? '', maxScore)
+    return !parsed.ok || parsed.value !== recorded
+  }
+  // A queued result is recoverable; a draft that has not reached persist is not.
+  function changeSelection(next: Selection) {
+    if (eligibleRoster.some(student => hasUnsavedInput(student._id)) && !window.confirm('Leave this assessment? Unsaved input will be cleared. Results already saved or queued remain available.')) return
+    setPicked(next)
+  }
+  const queuedCount = queued.filter(entry => !['Accepted', 'Rejected', 'Blocked', 'Uncertain'].includes(entry.state)).length
+  const unconfirmedCount = queued.filter(entry => entry.state === 'Uncertain').length
+  const attentionCount = new Set([...Object.keys(errors), ...Object.keys(flash).filter(id => flash[id] === 'review' || flash[id] === 'error'), ...queued.filter(entry => entry.state === 'Rejected' || entry.state === 'Blocked').map(entry => entry.payload.studentId)]).size
+  const unsavedCount = eligibleRoster.filter(student => hasUnsavedInput(student._id)).length
+  const saveSummary = [
+    attentionCount ? `${attentionCount} ${attentionCount === 1 ? 'result needs' : 'results need'} attention` : '',
+    unsavedCount ? `${unsavedCount} unsaved input${unsavedCount === 1 ? '' : 's'}` : '',
+    queuedCount ? `${queuedCount} saved locally - pending synchronization` : '',
+    unconfirmedCount ? `${unconfirmedCount} acceptance unconfirmed - see synchronization panel` : '',
+  ].filter(Boolean).join(' | ') || (paper ? 'Recorded results loaded' : 'New paper - no saved results')
 
   if (!subjects.length) {
     return (
@@ -402,27 +464,10 @@ export default function MarksEntry() {
   }
 
   return (
-    <>
+    <div className="marks-workspace" ref={workspace}>
       <PageHeader
         title="Marks Entry"
-        subtitle="Choose the paper, then key the results straight into the register."
-        meta={
-          <>
-            <span>
-              {term?.name} {term?.academic_year}
-            </span>
-            <span>
-              {cls?.class_name} {cls?.stream_name}
-            </span>
-            <span>{picked.exam_type}</span>
-            <span>Out of {maxScore}</span>
-            <span className={locked ? 'text-danger' : 'text-ok'}>{locked ? 'Read-only' : 'Editing open'}</span>
-            <span className="figure">
-              {entered}/{roster.length} entered
-            </span>
-            <span>{paper ? 'Recorded paper' : 'New paper — nothing saved yet'}</span>
-          </>
-        }
+        subtitle="Select an assessment and enter student results."
         actions={
           <>
             {!locked && paper && missing.length > 0 ? (
@@ -456,219 +501,66 @@ export default function MarksEntry() {
         }
       />
 
-      {/* ── the bar: type, subject, sort, term, class, paper total ─────── */}
-      <section className="card mb-4 p-4 no-print" data-paper-bar>
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-          <label className="block">
-            <span className="field-label">Exam type</span>
-            <select
-              className="select-field"
-              value={picked.exam_type}
-              data-field="exam-type"
-              onChange={(event) => setPicked({ ...picked, exam_type: event.target.value })}
-            >
-              {EXAM_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </label>
 
-          <label className="block">
-            <span className="field-label">Term</span>
-            <select
-              className="select-field"
-              value={picked.term_id}
-              data-field="term"
-              onChange={(event) => setPicked({ ...picked, term_id: event.target.value })}
-            >
-              {terms.map((entry) => (
-                <option key={entry._id} value={entry._id}>
-                  {entry.name} · {entry.academic_year}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="field-label">Class</span>
-            <select
-              className="select-field"
-              value={picked.class_id}
-              data-field="class"
-              onChange={(event) => setPicked({ ...picked, class_id: event.target.value })}
-            >
-              {classes.map((entry) => (
-                <option key={entry._id} value={entry._id}>
-                  {entry.class_name} {entry.stream_name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="field-label">Paper is out of</span>
-            <input
-              className="input-field figure"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              value={outOf}
-              data-field="paper-out"
-              disabled={locked}
-              onChange={(event) => setOutOf(event.target.value)}
-              onBlur={() => void commitTotal()}
-            />
-            <span className="mt-1 block text-[11px] text-ink/45" data-total-hint>
-              {typedTotal > 0
-                ? `1 mark = ${(100 / typedTotal).toFixed(1)}% · ${Math.round(typedTotal / 2)} = 50%`
-                : `Enter the total this paper is marked out of (recorded: ${paper?.max_score ?? 100}).`}
-            </span>
-          </label>
-
-          {/* ── subject: type a name or code, or scroll the list ───────── */}
-          <div className="md:col-span-3 xl:col-span-2">
-            <span className="field-label">Subject</span>
-            <input
-              className="input-field"
-              type="search"
-              value={query}
-              placeholder="Type a subject name or Cambridge code…"
-              aria-label="Search subjects"
-              data-field="subject-search"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <div
-              className="mt-1.5 max-h-[138px] overflow-y-auto rounded border border-rule bg-sunken p-1"
-              role="listbox"
-              aria-label="Subjects"
-              data-subject-list
-            >
-              {filtered.map((entry) => {
-                const selected = entry._id === picked.subject_id
-                return (
-                  <button
-                    key={entry._id}
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    data-subject-option={entry._id}
-                    className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[12.5px] transition ${
-                      selected ? 'bg-crimson font-medium text-white' : 'text-ink/75 hover:bg-raised'
-                    }`}
-                    onClick={() => setPicked({ ...picked, subject_id: entry._id })}
-                  >
-                    <span className="truncate">{entry.name}</span>
-                    <span className="shrink-0 font-mono text-[10.5px] opacity-70">{entry.code}</span>
-                  </button>
-                )
-              })}
-              {filtered.length === 0 ? (
-                <p className="px-2 py-3 text-center text-[11.5px] text-ink/45">No subject matches “{query}”.</p>
-              ) : null}
-            </div>
-            <span className="mt-1 block text-[11px] text-ink/45" data-subject-picked>
-              {subject ? `${subject.name} · ${subject.code}` : 'No subject selected'}
-              {subject && !subjects.some((entry) => entry._id === subject._id)
-                ? ' — not one of your assigned subjects'
-                : ''}
-            </span>
-          </div>
-
-          {/* ── sort the register ─────────────────────────────────────── */}
-          <div className="md:col-span-3 xl:col-span-2 xl:self-end">
-            <span className="field-label">Sort the register</span>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5" role="group" aria-label="Sort register">
-              {(
-                [
-                  ['adm', 'Adm no.'],
-                  ['name', 'Name'],
-                  ['gender', 'Gender'],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`btn btn-sm ${sortKey === key ? 'btn-primary' : ''}`}
-                  aria-pressed={sortKey === key}
-                  data-sort={key}
-                  onClick={() => setSortKey(key)}
-                >
-                  {label}
-                </button>
-              ))}
-              <span className="ml-1 font-mono text-[11px] text-ink/45" data-register-count>
-                {roster.length} on register · {entered}/{roster.length} entered · out of {maxScore}
-              </span>
-            </div>
-          </div>
-        </div>
+      <section className="card marks-configuration no-print" aria-label="Assessment configuration" data-paper-bar>
+        <label><span className="field-label">Exam type</span>
+          <select className="select-field" value={picked.exam_type} data-field="exam-type" onChange={event => changeSelection({ ...picked, exam_type: event.target.value })}>
+            {EXAM_TYPES.map(type => <option key={type}>{type}</option>)}
+          </select>
+        </label>
+        <label><span className="field-label">Academic term</span>
+          <select className="select-field" value={picked.term_id} data-field="term" onChange={event => changeSelection({ ...picked, term_id: event.target.value })}>
+            {terms.map(entry => <option key={entry._id} value={entry._id}>{entry.name} · {entry.academic_year}</option>)}
+          </select>
+        </label>
+        <label><span className="field-label">Class</span>
+          <select className="select-field" value={picked.class_id} data-field="class" onChange={event => changeSelection({ ...picked, class_id: event.target.value })}>
+            {classes.map(entry => <option key={entry._id} value={entry._id}>{entry.class_name} {entry.stream_name}</option>)}
+          </select>
+        </label>
+        <label><span className="field-label">Maximum marks</span>
+          <input className="input-field figure" type="number" min={1} inputMode="numeric" value={outOf} data-field="paper-out" disabled={locked}
+            onChange={event => setOutOf(event.target.value)} onBlur={() => void commitTotal()} />
+        </label>
+        <SubjectCombobox subjects={subjects} selected={subject} onSelect={subject_id => changeSelection({ ...picked, subject_id })} />
       </section>
-
-      {locked ? (
-        <div
-          role="alert"
-          className="mb-4 flex items-start gap-2 rounded border border-danger/30 bg-danger/5 px-3 py-2.5 text-[12px] text-danger no-print"
-        >
-          <Lock size={14} className="mt-0.5 shrink-0" />
-          <p>{permission.reason ?? 'This paper is read-only for your account.'}</p>
+      <section className="card marks-register no-print" aria-labelledby="marks-register-heading">
+        <div className="marks-context">
+          <div><span className="marks-eyebrow">Current assessment</span>
+            <p data-assessment-context>{cls?.class_name} {cls?.stream_name} · {subject?.name ?? 'Select a subject'} · {picked.exam_type} · {term?.name} ({term?.academic_year})</p>
+          </div>
+          <span className="marks-maximum">Maximum marks <strong>{maxScore}</strong></span>
         </div>
-      ) : null}
-
-      {/* ── who is still missing a result, before the register ────────── */}
-      {blockedEnrollmentCount > 0 ? (
-        <div role="status" className="mb-3 rounded border border-warn/40 bg-warn/8 px-3 py-2.5 text-[12px] text-ink/75">
-          {blockedEnrollmentCount} student{blockedEnrollmentCount === 1 ? '' : 's'} are read-only because enrollment is unverified, empty, or does not include this subject for the selected term. Their enrollment status is shown in the register.
+        <div className="marks-register-toolbar">
+          <div><h2 id="marks-register-heading">Student marks register</h2><span data-register-count>{eligibleRoster.length} enrolled student{eligibleRoster.length === 1 ? '' : 's'}</span></div>
+          <div className="marks-sort" role="group" aria-label="Sort register"><span>Sort</span>
+            {([['adm', 'Adm no.'], ['name', 'Name'], ['gender', 'Gender']] as const).map(([key, label]) =>
+              <button key={key} type="button" className="btn btn-sm" aria-pressed={sortKey === key} data-sort={key} onClick={() => setSortKey(key)}>{label}</button>)}
+          </div>
         </div>
-      ) : null}
-
-      {missing.length ? (
-        <div
-          role="alert"
-          data-missing={missing.length}
-          className={`mb-3 flex items-start gap-2 rounded border px-3 py-2.5 text-[12px] no-print ${
-            locked ? 'border-brass/40 bg-brass/5 text-brass-deep' : 'border-warn/40 bg-warn/8 text-ink/75'
-          }`}
-        >
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <p className="min-w-0">
-            <span className="font-semibold">
-              {missing.length} {missing.length === 1 ? 'result is' : 'results are'} not entered
-            </span>
-            {' — '}
-            {missing.map((student) => student.full_name).join(', ')}.
-            {locked
-              ? ' This paper is read-only, so the blanks stay blank.'
-              : paper
-                ? ' They stay blank until you record them as X (missing marks) — nothing is filled in behind you.'
-                : ' Nothing is saved until you key a result in; no rows are created for a paper nobody has entered.'}
-          </p>
+        <div className="marks-status-strip">
+          <span className={locked ? 'text-danger' : 'text-ok'}>{locked ? <Lock size={13} /> : <Check size={13} />}{locked ? 'Read-only' : 'Editing open'}</span>
+          <div className="marks-progress"><span>{eligibleRoster.length ? `${entered} of ${eligibleRoster.length} students entered` : 'No eligible register'}</span>
+            {eligibleRoster.length > 0 && <progress aria-label="Recorded results" value={entered} max={eligibleRoster.length} />}
+          </div>
+          <span role="status" data-save-status>{saveSummary}</span>
         </div>
-      ) : null}
-
-      <div className="card overflow-hidden no-print">
-        <div className="overflow-x-auto">
-          <table className="data-table min-w-[780px]">
-            <thead>
-              <tr>
-                <th className="w-[46px]">#</th>
-                <th>Admission no.</th>
-                <th>Student</th>
-                <th className="text-right">Score</th>
-                <th className="w-[74px] text-right">%</th>
-                <th className="w-[80px]">Grade</th>
-                <th className="w-[100px]">Status</th>
-              </tr>
-            </thead>
+        {locked && <p className="marks-notice" role="note">{permission.reason ?? 'This paper is read-only for your account.'}</p>}
+        {!subject ? <EmptyState title="Select a subject" hint="Choose a subject above to load the enrolled student register." /> : unresolvedRoster.length ?
+          <p className="marks-notice" role="alert">Enrollment verification is unresolved for {unresolvedRoster.length} student{unresolvedRoster.length === 1 ? '' : 's'} in this class and period. Only verified subject enrollments are shown. Ask the registrar to check enrollment; reconnect to reload if verification failed. <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>Reload register</button></p> : null}
+        {subject && !eligibleRoster.length && !unresolvedRoster.length && <EmptyState title="No eligible students" hint="No students in this class have verified enrollment in the selected subject for this term." />}
+        {eligibleRoster.length > 0 && <div className="marks-table-scroll" tabIndex={0} role="region" aria-label="Student score entry; scroll for more students and columns">
+          <table className="data-table marks-table">
+            <thead><tr><th scope="col">#</th><th scope="col">Admission no.</th><th scope="col">Student</th><th scope="col" className="text-right">Score</th><th scope="col" className="text-right">%</th><th scope="col">Grade</th><th scope="col">Status</th></tr></thead>
             <tbody>
-              {roster.map((student, index) => {
-                const state = flash[student._id]
-                const error = errors[student._id]
+              {eligibleRoster.map((student, index) => {
+                const local = queued.find(entry => entry.payload.studentId === student._id)
+                const state = flash[student._id] ?? (local?.state === 'Rejected' ? 'error' : local?.state === 'Blocked' ? 'review' : local && local.state !== 'Accepted' ? 'queued' : undefined)
+                const error = errors[student._id] ?? (local && ['Rejected', 'Blocked'].includes(local.state) ? local.last_error : undefined)
                 const enrolledForPaper = verifiedEnrolledIn(student, picked.term_id, picked.subject_id)
                 const enrollmentStatus = enrollmentLabel(student, picked.term_id, picked.subject_id)
                 return (
-                  <tr key={student._id}>
+                  <tr key={student._id} data-student-row={student._id} data-active={activeStudent === student._id}>
                     <td className="figure text-[11px] text-ink/40">{index + 1}</td>
                     <td className="figure text-[11.5px] text-ink/60">{student.admission_number}</td>
                     <td>
@@ -687,17 +579,24 @@ export default function MarksEntry() {
                         disabled={locked || !enrolledForPaper}
                         inputMode="text"
                         aria-label={`Score for ${student.full_name}`}
+                        aria-invalid={Boolean(error)}
+                        aria-describedby={error ? `score-error-${student._id}` : undefined}
+                        onFocus={() => setActiveStudent(student._id)}
                         placeholder="—"
-                        onChange={(event) =>
+                        onChange={(event) => {
                           setDrafts((current) => ({ ...current, [student._id]: event.target.value }))
-                        }
-                        onBlur={() => void persist(student._id)}
+                          setFlash(current => { const next = { ...current }; delete next[student._id]; return next })
+                          setErrors(current => { const next = { ...current }; delete next[student._id]; return next })
+                        }}
+                        onBlur={() => { setActiveStudent(null); if (!advancing.current.has(student._id)) void persist(student._id) }}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter') {
                             event.preventDefault()
-                            void persist(student._id).then((ok) => {
+                            if (event.repeat || advancing.current.has(student._id)) return
+                            advancing.current.add(student._id)
+                            void persist(student._id).then(ok => {
                               if (ok) focusOffset(student._id, 1)
-                            })
+                            }).finally(() => advancing.current.delete(student._id))
                           } else if (event.key === 'ArrowDown') {
                             event.preventDefault()
                             focusOffset(student._id, 1)
@@ -707,7 +606,7 @@ export default function MarksEntry() {
                           }
                         }}
                       />
-                      {error ? <p className="mt-1 text-[10px] text-danger">{error}</p> : null}
+                      {error ? <p id={`score-error-${student._id}`} role="alert" className="mt-1 text-[11px] text-danger">{error}</p> : null}
                     </td>
                     <td className="text-right">
                       <span className="figure text-[11.5px] text-ink/60" data-percent={student._id}>
@@ -718,22 +617,23 @@ export default function MarksEntry() {
                       <GradePill grade={gradeForDraft(student._id)} size="sm" />
                     </td>
                     <td>
+                      {/^[xy]$/i.test((drafts[student._id] ?? '').trim()) && <p className="text-[11px] font-medium">{(drafts[student._id] ?? '').trim().toUpperCase() === 'X' ? 'Missing mark' : 'Irregularity'}</p>}
                       {state === 'saved' ? (
                         <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-ok">
-                          <Check size={11} /> Saved
+                          <Check size={11} /> Accepted
                         </span>
                       ) : state === 'queued' ? (
-                        <span className="text-[10.5px] font-medium text-warn">On this device</span>
+                        <span className="text-[10.5px] font-medium text-warn">{local?.state === 'Uncertain' ? 'Acceptance unconfirmed' : local?.state === 'Retryable' ? 'Sync retry needed' : local?.state === 'Synchronizing' ? 'Synchronizing' : 'Pending sync'}</span>
                       ) : state === 'review' ? (
                         <span className="text-[10.5px] font-medium text-danger">Needs review</span>
                       ) : state === 'error' ? (
-                        <span className="text-[10.5px] font-medium text-danger">Rejected</span>
+                        <span className="text-[10.5px] font-medium text-danger">{queued.some(entry => entry.payload.studentId === student._id && entry.state === 'Rejected') ? 'Rejected' : 'Check result'}</span>
                       ) : !enrolledForPaper ? (
                         <span className="text-[10.5px] font-medium text-warn">{enrollmentStatus}</span>
                       ) : markFor(student._id)?.score != null ? (
-                        <span className="text-[10.5px] text-ink/45">Entered</span>
+                        <span className="text-[11px] text-ink/60">{hasUnsavedInput(student._id) ? 'Unsaved input' : 'Accepted'}</span>
                       ) : (
-                        <span className="text-[10.5px] text-ink/35">Pending</span>
+                        <span className="text-[11px] text-ink/55">{(drafts[student._id] ?? '').trim() ? 'Unsaved input' : 'Unentered'}</span>
                       )}
                     </td>
                   </tr>
@@ -741,24 +641,17 @@ export default function MarksEntry() {
               })}
             </tbody>
           </table>
-        </div>
-      </div>
+        </div>}
+        <details className="marks-help"><summary>Keyboard help &amp; result key</summary>
+          <p>Enter commits and moves to the next student. Up / Down move between score fields. Leaving a score field saves it. Valid entries: 0-{maxScore}; X = missing marks; Y = irregularity. X and Y are recorded outcomes, not numeric results. Percentages use the paper maximum.</p>
+          <p>Pending sync means saved on this device only. Accepted means confirmed by the school database. Rejected or review-needed results require attention; see the row message and synchronization panel.</p>
+          <p>Grade scale: {scale.name}. {scale.bands.map(band => `${band.grade}: >=${band.min_score}%`).join(' · ')}</p>
+          {session?.role === 'teacher' && <p>{mayEnterMarks ? `Your assigned subjects${marksCloseAt ? ` · school closes ${formatDateTime(marksCloseAt)}` : ''}` : 'Your account is read-only; the registrar grants mark entry.'}</p>}
+          {subject && !subjects.some(entry => entry._id === subject._id) && <p>This linked subject is outside your assigned subjects.</p>}
+        </details>
+        {missing.length > 0 && <details className="marks-help" data-missing={missing.length}><summary>{missing.length} results not entered</summary><p>{missing.map(student => student.full_name).join(', ')}. Blanks remain blank unless explicitly recorded as X.</p></details>}
+      </section>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-[11px] text-ink/45 no-print">
-        <span>Enter commits and moves to the next student · ↑ ↓ navigate · blur saves</span>
-        <span>
-          Accepted: 0–{maxScore}, <strong>X</strong> missing marks, <strong>Y</strong> irregularity
-        </span>
-        {session?.role === 'teacher' ? (
-          <span>
-            {mayEnterMarks
-              ? `Scoped to your assigned subjects${marksCloseAt ? ` · school closes ${formatDateTime(marksCloseAt)}` : ''}`
-              : 'Your account is read-only — the registrar grants mark entry in Settings'}
-          </span>
-        ) : null}
-      </div>
-
-      {/* ── printed mark sheet ─────────────────────────────────────── */}
       <div className="print-only sheet print-page text-[10.5px]">
         <div className="mb-4 flex items-start justify-between border-b border-ink/25 pb-2">
           <div>
@@ -841,6 +734,6 @@ export default function MarksEntry() {
           <span className="ml-1">This paper was closed by the registrar.</span>
         </p>
       ) : null}
-    </>
+    </div>
   )
 }

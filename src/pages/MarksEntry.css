@@ -1,0 +1,81 @@
+/* Marks Entry only; application navigation and printed reports retain their styles. */
+.marks-workspace { --marks-nav-height: 0px; min-width: 0; }
+.marks-workspace .workspace-page-heading { margin-bottom: 10px; padding-bottom: 9px; }
+.marks-workspace .workspace-page-heading h1 { font-size: 23px; }
+.marks-workspace .workspace-page-heading .btn { min-height: 36px; border-radius: 5px; }
+.marks-configuration { display: grid; grid-template-columns: 1fr 1.4fr 1fr .8fr 2fr; align-items: start; gap: 12px; padding: 12px 16px; margin-bottom: 10px; position: relative; z-index: 12; }
+.marks-configuration > * { min-width: 0; }
+.marks-configuration .field-label { display: block; margin-bottom: 5px; font-size: 11px; }
+.marks-configuration :is(input,select) { height: 39px; border-radius: 5px; font-size: 13px; }
+.marks-subject { position: relative; }
+.marks-subject-input { position: relative; }
+.marks-subject-input > svg { position: absolute; top: 12px; pointer-events: none; color: #72707a; }
+.marks-subject-input > svg:first-child { left: 10px; }
+.marks-subject-input > svg:last-child { right: 9px; }
+.marks-subject-input input { padding-left: 32px; padding-right: 27px; }
+.marks-subject-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.marks-subject-popup { position: absolute; top: 65px; left: 0; right: 0; min-width: 260px; background: white; border: 1px solid #cec6ca; border-radius: 6px; box-shadow: 0 8px 20px #30212a1a; padding: 4px; z-index: 30; }
+.marks-subject-popup [role=listbox] { max-height: 255px; overflow-y: auto; scroll-padding: 4px; }
+.marks-subject-popup [role=option] { display: flex; align-items: center; gap: 8px; padding: 9px; border-radius: 3px; cursor: pointer; color: #35303a; font-size: 13px; }
+.marks-subject-popup [role=option][data-highlighted=true] { background: #f7edf0; outline: 1px solid #a90f2d; outline-offset: -1px; }
+.marks-subject-popup [role=option] > span { flex: 1; min-width: 0; }
+.marks-subject-popup strong { display: block; font-weight: 600; }
+.marks-subject-popup small { display: block; font-size: 11px; color: #706570; }
+.marks-subject-popup code { font-size: 12px; }
+.marks-subject-popup p { padding: 12px; font-size: 12px; }
+.marks-register { position: relative; }
+.marks-context { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-bottom: 1px solid #e8dce0; background: #fcf7f8; border-radius: 6px 6px 0 0; }
+.marks-eyebrow { display: block; color: #a90f2d; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 3px; }
+.marks-context p { font-size: 14px; font-weight: 600; line-height: 1.45; }
+.marks-maximum { display: flex; gap: 8px; align-items: center; flex-shrink: 0; font-size: 12px; color: #625762; }
+.marks-maximum strong { color: #392b34; font-size: 18px; font-variant-numeric: tabular-nums; }
+.marks-register-toolbar { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 9px 16px; }
+.marks-register-toolbar > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.marks-register-toolbar h2 { font-size: 15px; font-weight: 650; }
+.marks-register-toolbar [data-register-count] { color: #726873; font-size: 12px; }
+.marks-sort { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #6f6570; }
+.marks-sort > span { margin-right: 5px; }
+.marks-sort .btn { min-height: 32px; border-radius: 4px; }
+.marks-sort [aria-pressed=true] { color: #a90f2d; background: #f9eef1; border-color: #cda3ad; }
+.marks-status-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding: 9px 16px; border-block: 1px solid #eee7eb; font-size: 12px; color: #625862; }
+.marks-status-strip > span:first-child { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.marks-status-strip [data-save-status] { margin-left: auto; }
+.marks-progress { display: flex; align-items: center; gap: 10px; }
+.marks-progress progress { width: 75px; height: 5px; accent-color: #a90f2d; border: 0; border-radius: 4px; }
+.marks-progress progress::-webkit-progress-bar { background: #eee7eb; border-radius: 4px; }
+.marks-progress progress::-webkit-progress-value { background: #a90f2d; border-radius: 4px; }
+.marks-notice { padding: 9px 16px; background: #fff9ec; border-bottom: 1px solid #eee1c4; font-size: 12px; color: #71511c; }
+.marks-table-scroll { overflow: auto; max-height: min(62vh, 650px); scroll-padding-top: calc(45px + var(--marks-head-offset, 0px)); }
+.marks-table { min-width: 800px; }
+.marks-table th { position: sticky; top: var(--marks-head-offset, 0px); z-index: 2; background: #f4f1f3; color: #635363; padding: 10px 14px; font-size: 10px; }
+.marks-table td { padding: 8px 14px; vertical-align: middle; }
+.marks-table th:nth-child(3) { width: 32%; }
+.marks-table tr:nth-child(even) td { background: #fcfbfc; }
+.marks-table tr[data-active=true] td { background: #fcf0f3; }
+.marks-table tr[data-active=true] td:first-child { box-shadow: inset 3px 0 #a90f2d; }
+.marks-table input { height: 36px; min-width: 86px; border-radius: 4px; background: white; font-size: 15px; font-variant-numeric: tabular-nums; }
+.marks-table input:focus { border-color: #a90f2d; outline: 2px solid #a90f2d; outline-offset: 2px; }
+.marks-table input:disabled { background: #f2f0f2; }
+.marks-table td:nth-child(2), .marks-table td:nth-child(5) { font-variant-numeric: tabular-nums; }
+.marks-table td:last-child { min-width: 115px; }
+.marks-help { padding: 10px 16px; border-top: 1px solid #eee7eb; font-size: 12px; color: #665a66; }
+.marks-help summary { cursor: pointer; width: fit-content; font-weight: 500; }
+.marks-help p { margin-top: 8px; max-width: 100ch; line-height: 1.6; }
+.marks-workspace :is(button,summary,[role=region]):focus-visible { outline: 2px solid #a90f2d; outline-offset: 2px; }
+@media (min-width: 1024px) { .marks-context { position: sticky; top: var(--marks-nav-height); z-index: 10; } }
+@media (max-width: 1023px) {
+  .marks-configuration { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .marks-subject { grid-column: 1 / -1; }
+  .marks-status-strip [data-save-status] { margin-left: 0; }
+}
+@media (max-width: 639px) {
+  .marks-configuration { padding: 12px; gap: 10px; }
+  .marks-configuration > label:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .marks-context { align-items: flex-start; flex-direction: column; padding: 12px; }
+  .marks-context p { font-size: 13px; overflow-wrap: anywhere; }
+  .marks-maximum strong { font-size: 14px; }
+  .marks-register-toolbar { align-items: flex-start; flex-direction: column; padding: 12px; }
+  .marks-status-strip { padding: 10px 12px; gap: 8px 14px; }
+  .marks-subject-popup { min-width: 0; }
+  .marks-progress { flex-wrap: wrap; gap: 6px; }
+}
