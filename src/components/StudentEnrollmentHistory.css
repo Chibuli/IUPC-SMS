@@ -1,0 +1,45 @@
+.enrollment-history { border: 1px solid #e5e1e2; border-radius: 5px; font-size: 12px; color: #343038; }
+.enrollment-history .eh-heading { width: 100%; display: flex; justify-content: space-between; border: 0; border-radius: 4px; padding: 12px; color: #a90f2d; font-weight: 650; background: #fff8fa; }
+.enrollment-history .eh-body { padding: 12px; }
+.enrollment-history p { margin: 6px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.enrollment-history button { min-height: 34px; border: 1px solid #d7c8cc; padding: 5px 10px; border-radius: 4px; background: white; cursor: pointer; }
+.enrollment-history button:disabled { opacity: .5; cursor: default; }
+.enrollment-history :is(button,input,select,textarea,summary):focus-visible { outline: 2px solid #a90f2d; outline-offset: 2px; }
+.enrollment-history h3 { font-weight: 650; color: #80213a; }
+.enrollment-history .eh-timeline { margin-top: 16px; border-top: 1px solid #eee6e8; padding-top: 12px; }
+.enrollment-history .eh-section-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.enrollment-history article { margin: 10px 0; padding: 8px 10px; border-left: 2px solid #a90f2d; background: #faf9f9; }
+.enrollment-history .eh-state { font-size: 11px; font-weight: 600; }
+.enrollment-history .eh-audit { margin: 8px 0; padding-left: 8px; border-left: 1px solid #ddd; }
+.enrollment-history code { font-size: 10px; overflow-wrap: anywhere; }
+.enrollment-history .eh-error { color: #94162e; background: #fff2f4; padding: 10px; border: 1px solid #e9bec7; }
+.enrollment-history .eh-notice { color: #235c3f; background: #f1faf5; padding: 8px; }
+.enrollment-history .eh-empty { padding: 12px 0; font-weight: 500; }
+.enrollment-history .eh-editor { margin-top: 16px; padding: 12px; background: #fafafa; border: 1px solid #e5d6da; }
+.enrollment-history .eh-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; margin: 12px 0; }
+.enrollment-history label { display: flex; flex-direction: column; gap: 5px; font-weight: 550; }
+.enrollment-history :is(input:not([type=checkbox]),select,textarea) { width: 100%; min-width: 0; min-height: 36px; padding: 6px; background: white; border: 1px solid #cbc5c7; border-radius: 3px; font-size: 12px; font-weight: 400; }
+.enrollment-history textarea { min-height: 65px; }
+.enrollment-history .eh-check { flex-direction: row; align-items: flex-start; gap: 8px; font-weight: 400; margin: 10px 0; }
+.enrollment-history input[type=checkbox] { margin-top: 3px; flex-shrink: 0; }
+.enrollment-history .eh-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.enrollment-history .eh-help { margin: 12px 0; }
+.enrollment-history summary { cursor: pointer; }
+.enrollment-history .eh-review { border-top: 2px solid #a90f2d; padding-top: 12px; margin-top: 12px; }
+.enrollment-history ol { list-style: decimal; padding-left: 22px; }
+.enrollment-history li { margin: 8px 0; overflow-wrap: anywhere; }
+.student-detail-panel .enrollment-history { border: 0; }
+.student-detail-panel .enrollment-history .eh-body { padding: 12px 0 0; }
+.student-detail-panel .enrollment-history .eh-heading { padding: 0 0 12px; background: white; color: #a90f2d; border-bottom: 1px solid #e5dce0; }
+.enrollment-history .eh-heading span { font-size: 10px; font-weight: 400; color: #6f646a; }
+.enrollment-history .eh-intro { color: #6f646a; font-size: 11px; }
+.enrollment-history .eh-form-section { padding: 12px 0; border-top: 1px solid #e4dadd; margin-top: 12px; }
+.enrollment-history .eh-form-section legend { font-size: 11px; font-weight: 650; color: #80213a; padding-right: 8px; }
+.enrollment-history .eh-form-section .eh-grid { margin: 0; }
+.enrollment-history .eh-period { font-weight: 550; }
+.enrollment-history .eh-evidence { font-size: 11px; color: #6f646a; }
+.enrollment-history .eh-state { border: 1px solid #dccad0; border-radius: 3px; padding: 1px 5px; margin-left: 5px; white-space: nowrap; }
+.student-detail-panel .enrollment-history .eh-actions { position: sticky; bottom: -16px; background: #fff; padding: 10px 0; z-index: 1; border-top: 1px solid #ede6e8; }
+.enrollment-history article .eh-actions { position: static !important; padding: 4px 0 !important; background: transparent !important; border: 0 !important; }
+@media (max-width:520px) { .student-detail-panel .enrollment-history .eh-actions { bottom: -12px; } .enrollment-history .eh-actions button { flex: 1; min-height: 42px; } }
+@media (max-width: 520px) { .enrollment-history .eh-grid { grid-template-columns: minmax(0,1fr); } .enrollment-history .eh-section-title { align-items: flex-start; flex-direction: column; } }

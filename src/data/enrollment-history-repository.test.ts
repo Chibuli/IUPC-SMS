@@ -1,0 +1,21 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const mock = vi.hoisted(() => ({scope: {userId:'admin',schoolId:'school',verified:true} as {userId:string;schoolId:string;verified:boolean}|null, session: {user:{id:'admin'},expires_at:9999999999}, rpc:vi.fn(), online:true, configured:true}))
+vi.mock('./backend',()=>({getAccountScope:()=>mock.scope}))
+vi.mock('./supabase',()=>({get supabase(){return mock.configured ? {auth:{getSession:async()=>({data:{session:mock.session},error:null})},rpc:mock.rpc} : null}}))
+import { historyError, readEnrollmentHistory, saveEnrollmentHistory } from './enrollment-history-repository'
+const snapshot={school:[],class:[],subject:[],version:'v',contract_version:1,server_version_num:150019}
+describe('online-only enrollment history repository',()=>{
+ beforeEach(()=>{mock.scope={userId:'admin',schoolId:'school',verified:true};mock.session={user:{id:'admin'},expires_at:9999999999};mock.online=true;mock.configured=true;mock.rpc.mockReset();vi.stubGlobal('navigator',{get onLine(){return mock.online}})})
+ it('reads the verified account school and requested student',async()=>{mock.rpc.mockResolvedValue({data:snapshot,error:null});expect(await readEnrollmentHistory('fictional')).toEqual(snapshot);expect(mock.rpc).toHaveBeenCalledWith('read_enrollment_history',{target_school:'school',target_student:'fictional'})})
+ it('does not call the backend or queue when offline',async()=>{mock.online=false;await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'offline'});await expect(saveEnrollmentHistory('s',{id:'r',version:'v',steps:[]})).rejects.toMatchObject({kind:'offline'});expect(mock.rpc).not.toHaveBeenCalled()})
+ it('shows setup when the backend is not configured',async()=>{mock.configured=false;await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'setup'})})
+ it('requires verified school scope',async()=>{mock.scope=null;await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'permission'});expect(mock.rpc).not.toHaveBeenCalled()})
+ it('rejects a mismatched or expired session',async()=>{mock.session.user.id='another';await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'permission'});mock.session.user.id='admin';mock.session.expires_at=1;await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'permission'})})
+ it('rejects a response received after account change',async()=>{mock.rpc.mockImplementation(async()=>{mock.scope={userId:'other',schoolId:'other',verified:true};return {data:snapshot,error:null}});await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'permission'})})
+ it('does not turn missing migrations into an empty history',async()=>{mock.rpc.mockResolvedValue({data:null,error:{code:'PGRST202'}});await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'setup'})})
+ it('requires a valid read contract',async()=>{mock.rpc.mockResolvedValue({data:{...snapshot,school:null},error:null});await expect(readEnrollmentHistory('s')).rejects.toMatchObject({kind:'setup'})})
+ it('sends one atomic request and waits for authoritative confirmation',async()=>{mock.rpc.mockResolvedValue({data:{applied:true,change_id:'request'},error:null});await saveEnrollmentHistory('s',{id:'request',version:'v',steps:[]});expect(mock.rpc).toHaveBeenCalledTimes(1);expect(mock.rpc.mock.calls[0][1]).toMatchObject({request_id:'request',expected_version:'v',target_school:'school',target_student:'s'})})
+ it('does not claim success for an unconfirmed receipt',async()=>{mock.rpc.mockResolvedValue({data:{applied:true,change_id:'wrong'},error:null});await expect(saveEnrollmentHistory('s',{id:'request',version:'v',steps:[]})).rejects.toMatchObject({kind:'uncertain'})})
+ it('flags network loss as acceptance unconfirmed',async()=>{mock.rpc.mockResolvedValue({data:null,error:{message:'Failed to fetch'}});await expect(saveEnrollmentHistory('s',{id:'r',version:'v',steps:[]})).rejects.toMatchObject({kind:'uncertain'})})
+ for(const [code,kind] of [['40001','stale'],['PT409','stale'],['42501','permission'],['23514','validation'],['23503','validation'],['42P01','setup']])it(`maps ${code} to an accurate ${kind} state`,()=>{expect(historyError({code}).kind).toBe(kind)})
+})

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Archive, MessageSquare, Paperclip, Plus, Printer, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api, useDb } from '../data/db'
@@ -9,6 +9,8 @@ import { formatDate, formatDateTime, ordinal, round } from '../lib/format'
 import { offeredSubjects } from '../lib/subjects'
 import { validateAdmissionNumber } from '../lib/admission-number'
 import { isOperationalStudent } from '../data/student-lifecycle'
+import StudentEnrollmentHistory from '../components/StudentEnrollmentHistory'
+import StudentDetailsWorkspace from '../components/StudentDetailsWorkspace'
 
 type SortKey = 'name' | 'admission' | 'class'
 
@@ -43,6 +45,7 @@ export default function Students() {
   /** Set by the "Student" button on a class card: open the register on that stream. */
   const admitInto = (location.state as { admitInto?: string } | null)?.admitInto ?? null
 
+  const detailsCloseGuard = useRef<() => boolean>(() => true)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'All' | 'Active' | 'Alumni' | 'Archived'>('All')
   const [classId, setClassId] = useState(admitInto ?? 'all')
@@ -60,6 +63,7 @@ export default function Students() {
   const [formError, setFormError] = useState('')
   const [notice, setNotice] = useState('')
   const [removing, setRemoving] = useState(false)
+  useEffect(() => { setNoteText('') }, [studentId])
 
   // Drop the one-shot router state so a reload doesn't reopen the dialog.
   useEffect(() => {
@@ -402,11 +406,12 @@ export default function Students() {
       <Modal
         open={Boolean(selected)}
         title={selected ? selected.full_name : 'Student'}
-        onClose={() => navigate('/dashboard/students')}
+        onClose={() => { if (detailsCloseGuard.current()) navigate('/dashboard/students') }}
         width={620}
       >
         {selected ? (
-          <div className="space-y-4">
+          <StudentDetailsWorkspace key={`${selected._id}:${session?.schoolId}:${session?.role}`} closeGuard={detailsCloseGuard}
+            identity={<>
             <div className="flex items-center gap-3">
               <Avatar name={selected.full_name} size={46} />
               <div className="min-w-0 flex-1">
@@ -418,6 +423,8 @@ export default function Students() {
               <Badge tone={selected.archived ? 'danger' : selected.status === 'Active' ? 'ok' : 'neutral'}>{selected.archived ? 'Archived' : selected.status}</Badge>
             </div>
 
+            </>}
+            overview={<div className="space-y-4">
             <div className="rounded border border-rule px-3 py-2.5">
               <p className="micro">Subjects enrolled</p>
               <p className="mt-1 text-[12px] text-ink/75">
@@ -500,6 +507,39 @@ export default function Students() {
               </div>
             ) : null}
 
+            {isAdmin ? (
+              <div className="flex flex-col-reverse gap-2 border-t border-rule pt-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="max-w-sm text-[10.5px] leading-relaxed text-ink/45">
+                  {selected.archived ? 'Archived profiles and academic history are restricted to school administrators.' : 'Archiving removes this student from active workflows while retaining all academic history.'}
+                </p>
+                {selected.archived ? (
+                  <button type="button" className="btn btn-primary btn-sm shrink-0" disabled={removing} onClick={() => void reactivateStudent()}>
+                    <RotateCcw size={13} /> {removing ? 'Reactivating…' : 'Reactivate student'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm shrink-0"
+                    data-action="archive-student"
+                    disabled={removing}
+                    onClick={() => {
+                      if (window.confirm(`Archive ${selected.full_name} (${selected.admission_number})? Marks, reports, notes and enrollment history will be retained.`)) {
+                        void archiveStudent()
+                      }
+                    }}
+                  >
+                    <Archive size={13} /> {removing ? 'Archiving…' : 'Archive student'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-[10.5px] text-ink/35">
+                Marks, notes and the timetable are live. Editing an existing student's details and uploading attachments are not
+                enabled in this build.
+              </p>
+            )}
+            </div>}
+            notes={<div className="space-y-4">
             <div>
               <SectionTitle right={<span className="text-[11px] text-ink/45">{notes.length} notes</span>}>Notes &amp; attachments</SectionTitle>
               <ul className="space-y-2">
@@ -551,38 +591,10 @@ export default function Students() {
               </p>
             </div>
 
-            {isAdmin ? (
-              <div className="flex flex-col-reverse gap-2 border-t border-rule pt-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="max-w-sm text-[10.5px] leading-relaxed text-ink/45">
-                  {selected.archived ? 'Archived profiles and academic history are restricted to school administrators.' : 'Archiving removes this student from active workflows while retaining all academic history.'}
-                </p>
-                {selected.archived ? (
-                  <button type="button" className="btn btn-primary btn-sm shrink-0" disabled={removing} onClick={() => void reactivateStudent()}>
-                    <RotateCcw size={13} /> {removing ? 'Reactivating…' : 'Reactivate student'}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm shrink-0"
-                    data-action="archive-student"
-                    disabled={removing}
-                    onClick={() => {
-                      if (window.confirm(`Archive ${selected.full_name} (${selected.admission_number})? Marks, reports, notes and enrollment history will be retained.`)) {
-                        void archiveStudent()
-                      }
-                    }}
-                  >
-                    <Archive size={13} /> {removing ? 'Archiving…' : 'Archive student'}
-                  </button>
-                )}
-              </div>
-            ) : (
-              <p className="text-[10.5px] text-ink/35">
-                Marks, notes and the timetable are live. Editing an existing student's details and uploading attachments are not
-                enabled in this build.
-              </p>
-            )}
-          </div>
+            </div>}
+            history={(active,onDirtyChange) => <StudentEnrollmentHistory studentId={selected._id} embedded active={active} onDirtyChange={onDirtyChange} />}
+          />
+
         ) : null}
       </Modal>
 

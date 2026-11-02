@@ -1,0 +1,24 @@
+[role=dialog]:has(.student-detail-workspace) { max-width: 860px !important; max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; }
+[role=dialog]:has(.student-detail-workspace) > div:first-child { flex-shrink: 0; background: white; }
+[role=dialog]:has(.student-detail-workspace) > div:nth-child(2) { padding: 0; min-height: 0; display: flex; flex-direction: column; }
+.student-detail-workspace { display: flex; flex-direction: column; min-height: 0; }
+.student-detail-identity { padding: 14px 20px; flex-shrink: 0; }
+.student-detail-tabs { display: flex; gap: 4px; padding: 0 16px; border-bottom: 1px solid #e5dce0; flex-shrink: 0; background: #fff; }
+.student-detail-tabs button { padding: 12px 10px; min-height: 44px; font-size: 12px; font-weight: 600; color: #61555b; border-bottom: 2px solid transparent; }
+.student-detail-tabs button[aria-selected=true] { color: #a90f2d; border-bottom-color: #a90f2d; }
+.student-detail-tabs button:focus-visible,.student-detail-panel:focus-visible { outline: 2px solid #a90f2d; outline-offset: -3px; }
+.student-detail-draft { margin-left: 6px; font-size: 10px; color: #8c4d19; }
+.student-detail-panel { padding: 16px 20px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-padding: 12px 0 84px; }
+.student-detail-panel :is(input,select,textarea,.eh-check) { scroll-margin-block: 64px; }
+.student-detail-panel[hidden] { display: none; }
+.student-detail-panel > .space-y-4 { min-width: 0; }
+@media(max-width:520px) {
+  div:has(> [role=dialog] .student-detail-workspace) { padding: 12px; align-items: flex-start; }
+  [role=dialog]:has(.student-detail-workspace) { max-height: calc(100dvh - 24px); }
+  .student-detail-identity { padding: 10px 12px; }
+  .student-detail-tabs { padding: 0 4px; gap: 0; }
+  .student-detail-tabs button { padding: 10px 7px; font-size: 11px; }
+  .student-detail-panel { padding: 12px; }
+  .student-detail-draft { display: block; margin: 0; line-height: 1.3; }
+}
+div:has(> [role=dialog] .student-detail-workspace) { padding: 16px; align-items: center; overflow: hidden; }

@@ -1,0 +1,43 @@
+-- Fictional pre-upgrade data, used ONLY by the disposable-cluster verifier.
+insert into auth.users(id,email,raw_user_meta_data) values
+ ('61000000-0000-4000-8000-000000000001','history-admin@example.invalid','{"full_name":"Fictional History Admin"}'),
+ ('61000000-0000-4000-8000-000000000002','history-teacher@example.invalid','{"full_name":"Fictional History Teacher"}'),
+ ('61000000-0000-4000-8000-000000000003','history-other@example.invalid','{"full_name":"Fictional Other Admin"}');
+insert into public.schools(id,name,code) values
+ ('62000000-0000-4000-8000-000000000001','Fictional History School','HISTORY-FIX'),
+ ('62000000-0000-4000-8000-000000000002','Fictional Other School','OTHER-FIX');
+insert into public.teachers(id,school_id,full_name,email,employee_id) values
+ ('63000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','Fictional History Teacher','history-teacher@example.invalid','FIX-T');
+insert into public.memberships(school_id,user_id,role,teacher_id) values
+ ('62000000-0000-4000-8000-000000000001','61000000-0000-4000-8000-000000000001','admin',null),
+ ('62000000-0000-4000-8000-000000000001','61000000-0000-4000-8000-000000000002','teacher','63000000-0000-4000-8000-000000000001'),
+ ('62000000-0000-4000-8000-000000000002','61000000-0000-4000-8000-000000000003','admin',null);
+insert into public.classes(id,school_id,class_name,stream_name) values
+ ('64000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','Fictional Year 7','A'),
+ ('64000000-0000-4000-8000-000000000002','62000000-0000-4000-8000-000000000001','Fictional Year 7','B'),
+ ('64000000-0000-4000-8000-000000000003','62000000-0000-4000-8000-000000000002','Fictional Year 7','A');
+insert into public.subjects(id,school_id,name,code) values
+ ('65000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','Fictional Mathematics','H-MATH'),
+ ('65000000-0000-4000-8000-000000000002','62000000-0000-4000-8000-000000000001','Fictional English','H-ENG'),
+ ('65000000-0000-4000-8000-000000000003','62000000-0000-4000-8000-000000000002','Fictional Other Subject','O-SUB');
+insert into public.terms(id,school_id,name,academic_year,start_date,is_active) values
+ ('66000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','Fictional Term 1','2099','2099-01-01',false),
+ ('66000000-0000-4000-8000-000000000002','62000000-0000-4000-8000-000000000001','Fictional Term 2','2099','2099-05-01',false),
+ ('66000000-0000-4000-8000-000000000003','62000000-0000-4000-8000-000000000001','Fictional Term 3','2099','2099-09-01',true),
+ ('66000000-0000-4000-8000-000000000004','62000000-0000-4000-8000-000000000002','Fictional Other Term','2099','2099-01-01',true);
+insert into public.students(id,school_id,admission_number,full_name,gender,class_id) values
+ ('67000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','H-FIX-001','Fictional Amina Learner','Female','64000000-0000-4000-8000-000000000001'),
+ ('67000000-0000-4000-8000-000000000002','62000000-0000-4000-8000-000000000001','H-FIX-002','Fictional Baraka Learner','Male','64000000-0000-4000-8000-000000000001'),
+ ('67000000-0000-4000-8000-000000000003','62000000-0000-4000-8000-000000000002','O-FIX-001','Fictional Other Learner','Female','64000000-0000-4000-8000-000000000003');
+insert into public.students(id,school_id,admission_number,full_name,gender,class_id) values
+ ('67000000-0000-4000-8000-000000000004','62000000-0000-4000-8000-000000000001','H-FIX-004','Fictional Late Term Two','Female','64000000-0000-4000-8000-000000000001'),
+ ('67000000-0000-4000-8000-000000000005','62000000-0000-4000-8000-000000000001','H-FIX-005','Fictional Late Term Three','Male','64000000-0000-4000-8000-000000000001');
+insert into public.student_subjects(school_id,student_id,subject_id) values
+ ('62000000-0000-4000-8000-000000000001','67000000-0000-4000-8000-000000000001','65000000-0000-4000-8000-000000000001'),
+ ('62000000-0000-4000-8000-000000000001','67000000-0000-4000-8000-000000000002','65000000-0000-4000-8000-000000000001');
+select set_config('request.jwt.claim.sub','61000000-0000-4000-8000-000000000001',false);
+insert into public.exams(id,school_id,term_id,class_id,subject_id,exam_name,exam_type,max_score,exam_date) values
+ ('68000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','66000000-0000-4000-8000-000000000001','64000000-0000-4000-8000-000000000001','65000000-0000-4000-8000-000000000001','Fictional Midterm','Midterm',100,'2099-02-01');
+insert into public.marks(id,school_id,exam_id,student_id,score) values
+ ('69000000-0000-4000-8000-000000000001','62000000-0000-4000-8000-000000000001','68000000-0000-4000-8000-000000000001','67000000-0000-4000-8000-000000000001',75);
+select set_config('request.jwt.claim.sub','',false);
