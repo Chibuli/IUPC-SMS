@@ -15,4 +15,12 @@ describe('production build configuration', () => {
   it('rejects accidental browser exposure of additional secrets', () => {
     expect(() => validateProductionConfig({ ...valid, VITE_DATABASE_PASSWORD: 'fictional' })).toThrow('Unexpected browser-exposed')
   })
+  it('tolerates the Vercel-injected observability variable without relaxing the rest', () => {
+    const vercel = { VITE_VERCEL_OBSERVABILITY_CLIENT_CONFIG: '{"dsn":"fictional"}' }
+    expect(() => validateProductionConfig({ ...valid, ...vercel })).not.toThrow()
+    expect(() => validateProductionConfig({ ...valid, ...vercel, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_fictional' })).toThrow('Production requires a publishable frontend key')
+  })
+  it('still rejects any other VITE_ variable, including a vendor-prefixed one', () => {
+    expect(() => validateProductionConfig({ ...valid, VITE_VERCEL_ANALYTICS_SECRET: 'fictional' })).toThrow('Unexpected browser-exposed')
+  })
 })
