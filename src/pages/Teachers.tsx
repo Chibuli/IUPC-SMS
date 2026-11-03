@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { KeyRound, PenLine, RotateCcw, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
+import { KeyRound, PenLine, RotateCcw, Search, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react'
 import { api, useDb } from '../data/db'
 import { useSession } from '../session'
 import { supabaseConfigured } from '../data/supabase'
@@ -11,6 +11,13 @@ import { Avatar, Badge, EmptyState, Field, Modal, PageHeader, SectionTitle } fro
 import { AccessBadge, AccountBadge, PermissionSummary, PermissionToggles } from '../components/permissions'
 import { grantedPermissions, hasPermission, normalisePermissions } from '../lib/permissions'
 import { offeredSubjects } from '../lib/subjects'
+import {
+  assignableClasses,
+  classAssignmentLabel,
+  classSelectionToSave,
+  scopedClassIds,
+  toggleClassAssignment,
+} from '../lib/teacher-classes'
 import { formatDateTime } from '../lib/format'
 import type { Teacher, TeacherPermissionKey } from '../data/types'
 
@@ -21,6 +28,7 @@ interface TeacherForm {
   email: string
   employee_id: string
   subjectIds: string[]
+  classIds: string[]
   permissions: TeacherPermissionKey[]
 }
 
@@ -35,6 +43,7 @@ const blankForm = (teachers: Teacher[]): TeacherForm => ({
   email: '',
   employee_id: nextEmployeeId(teachers),
   subjectIds: [],
+  classIds: [],
   permissions: [],
 })
 
@@ -97,6 +106,9 @@ export default function Teachers() {
       email: teacher.email,
       employee_id: teacher.employee_id,
       subjectIds: [...teacher.assigned_subject_ids],
+      // Loaded explicitly so saving unrelated details sends the stored set back
+      // and cannot leave the class register empty.
+      classIds: classSelectionToSave(teacher.assigned_class_ids, undefined),
       permissions: grantedPermissions(teacher),
     })
     setError('')
@@ -107,6 +119,12 @@ export default function Teachers() {
   const awaiting = db.teachers.filter((teacher) => supabaseConfigured ? accountStatuses[teacher._id] !== 'email_verified' : !teacher.password_hash).length
 
   const offered = useMemo(() => offeredSubjects(db.subjects), [db.subjects])
+  // Only this school's streams may be assigned, even if a stale cache holds
+  // another tenant's rows.
+  const assignable = useMemo(
+    () => (session?.schoolId ? assignableClasses(db.classes, session.schoolId) : db.classes),
+    [db.classes, session?.schoolId],
+  )
 
   // The catalogue runs past two hundred syllabuses, so the picker filters on a
   // name or code and keeps what the teacher already holds at the top.
@@ -149,6 +167,10 @@ export default function Teachers() {
     }))
   }
 
+  function toggleClass(classId: string) {
+    setForm((current) => ({ ...current, classIds: toggleClassAssignment(current.classIds, classId) }))
+  }
+
   async function save() {
     const editingId = editor?.mode === 'edit' ? editor.id : null
     const name = form.full_name.trim().replace(/\s+/g, ' ')
@@ -175,11 +197,19 @@ export default function Teachers() {
       )
     }
 
+    const classScope = session?.schoolId
+      ? scopedClassIds(form.classIds, db.classes, session.schoolId)
+      : { accepted: form.classIds, rejected: [] as string[] }
+    if (classScope.rejected.length) {
+      return setError('A selected class belongs to another school. Reload the staff register and try again.')
+    }
+
     const payload = {
       full_name: name,
       email,
       employee_id: employeeId,
       assigned_subject_ids: form.subjectIds,
+      assigned_class_ids: classScope.accepted,
       permissions: normalisePermissions(form.permissions),
     }
 
@@ -188,7 +218,10 @@ export default function Teachers() {
     try {
     if (editingId) {
       await api.teachers.update(editingId, payload)
-      setNotice({ tone: 'ok', text: `${name} updated — ${form.subjectIds.length} subject${form.subjectIds.length === 1 ? '' : 's'} assigned.` })
+      setNotice({
+        tone: 'ok',
+        text: `${name} updated — ${form.subjectIds.length} subject${form.subjectIds.length === 1 ? '' : 's'} and ${form.classIds.length} class${form.classIds.length === 1 ? '' : 'es'} assigned.`,
+      })
     } else {
       const result = await registerTeacherWithInvitation(() => api.teachers.create(payload), supabaseConfigured ? inviteStaff : null)
       if (supabaseConfigured) {
@@ -331,6 +364,7 @@ export default function Teachers() {
         <div className="grid gap-3 md:grid-cols-2">
           {staff.map((teacher) => {
             const subjects = db.subjects.filter((subject) => teacher.assigned_subject_ids.includes(subject._id))
+            const classes = db.classes.filter((cls) => (teacher.assigned_class_ids ?? []).includes(cls._id))
             // min-w-0 on the card: the truncating email line would otherwise set
             // the grid track's min-content width and push past the viewport.
             return (
@@ -369,6 +403,19 @@ export default function Teachers() {
                           {subject.code} · {subject.name}
                         </span>
                       ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-2" data-classes={classes.length}>
+                  <p className="micro">Class assignments · {classes.length}</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {classes.length === 0 ? (
+                      <span className="text-[11px] text-ink/40">
+                        None — class access follows their timetable lessons.
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-ink/55">{classAssignmentLabel(classes)}</span>
                     )}
                   </div>
                 </div>
@@ -437,6 +484,14 @@ export default function Teachers() {
               Writing is granted, never assumed: an account starts read-only, and mark entry needs the registrar’s
               permission plus an open window. Marks stop being editable when the window closes, and a locked or
               published paper is read-only for everyone.
+            </span>
+          </p>
+          <p className="mt-2 flex items-start gap-2">
+            <Users size={14} className="mt-0.5 shrink-0 text-ink/35" />
+            <span>
+              Class access comes from two places and either one is enough: a stream assigned here, or a lesson on
+              their timetable. Assigning a class here lets them open that stream’s students, notes and report cards
+              even before the timetable is built; clearing it does not take away lesson-based access.
             </span>
           </p>
           <p className="mt-2 flex items-start gap-2">
@@ -538,6 +593,52 @@ export default function Teachers() {
               {form.subjectIds.length === 0
                 ? 'No subjects yet — the account will see no records until subjects are assigned.'
                 : `Scopes what they can see read-only: ${form.subjectIds.length} subject${form.subjectIds.length === 1 ? '' : 's'}.`}
+            </p>
+          </div>
+
+          <div>
+            <div className="mb-1 flex items-baseline justify-between gap-2">
+              <span className="field-label mb-0">Classes / streams</span>
+              {form.classIds.length ? (
+                <button
+                  type="button"
+                  className="text-[10.5px] text-ink/45 underline hover:text-ink"
+                  data-action="clear-classes"
+                  onClick={() => setForm((current) => ({ ...current, classIds: [] }))}
+                >
+                  Clear all
+                </button>
+              ) : (
+                <Badge tone="neutral">None assigned</Badge>
+              )}
+            </div>
+            <div className="flex max-h-[170px] flex-wrap content-start gap-1.5 overflow-y-auto rounded border border-rule bg-sunken/60 p-2">
+              {assignable.length === 0 ? (
+                <span className="px-1 py-0.5 text-[11px] text-ink/45">No streams are set up yet.</span>
+              ) : null}
+              {assignable.map((cls) => {
+                const on = form.classIds.includes(cls._id)
+                return (
+                  <button
+                    key={cls._id}
+                    type="button"
+                    data-class={cls._id}
+                    aria-pressed={on}
+                    onClick={() => toggleClass(cls._id)}
+                    className={`rounded border px-2 py-1 text-[11px] transition ${
+                      on ? 'border-crimson/40 bg-crimson/8 text-crimson' : 'border-rule bg-raised text-ink/55 hover:text-ink'
+                    }`}
+                  >
+                    {cls.class_name} {cls.stream_name}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-1 text-[11px] text-ink/45">
+              {form.classIds.length
+                ? `Grants ${form.classIds.length} stream${form.classIds.length === 1 ? '' : 's'} of students, note and report card access.`
+                : 'No explicit stream — class access follows their timetable lessons.'}{' '}
+              Clearing this list never removes timetable-based access.
             </p>
           </div>
 

@@ -40,7 +40,7 @@ export default function Dashboard() {
         title={session?.role === 'teacher' ? `Good day, ${session.name}` : 'Overview'}
         subtitle={
           session?.role === 'teacher'
-            ? `${school.name} · ${subjectScope ? `${subjectScope.length} subjects assigned` : 'Every subject in view'}`
+            ? `${school.name} · ${subjectScope ? `${subjectScope.length} subjects assigned` : 'Every subject in view'}${teacher?.assigned_class_ids?.length ? ` · ${teacher.assigned_class_ids.length} class${teacher.assigned_class_ids.length === 1 ? '' : 'es'} assigned` : ''}`
             : session?.role === 'guest'
               ? 'Read-only preview of the campus record.'
               : `${school.name} · Mombasa, Kenya`

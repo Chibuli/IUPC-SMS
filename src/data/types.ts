@@ -46,6 +46,11 @@ export interface Teacher {
   email: string
   employee_id: string
   assigned_subject_ids: ID[]
+  /**
+   * Streams the registrar assigned this teacher explicitly. Class access also
+   * follows timetable lessons, so this may legitimately be empty.
+   */
+  assigned_class_ids?: ID[]
   /** Empty array = read-only account. */
   permissions: TeacherPermissionKey[]
   initials: string

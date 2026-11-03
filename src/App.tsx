@@ -11,6 +11,7 @@ import Timetable from './pages/Timetable'
 import Subjects from './pages/Subjects'
 import Terms from './pages/Terms'
 import MarksEntry from './pages/MarksEntry'
+import Exams from './pages/Exams'
 import Analysis from './pages/Analysis'
 import Reports from './pages/Reports'
 import ReportCards from './pages/ReportCards'
@@ -52,9 +53,9 @@ export default function App() {
         <Route path="terms" element={<Terms />} />
         <Route path="marks-entry" element={<MarksEntry />} />
         <Route path="analysis" element={<Analysis />} />
-        {/* A paper is picked on the Marks Entry bar; these two keep older links
-            to the exam list and to one paper working. */}
-        <Route path="exams" element={<Navigate to="/dashboard/marks-entry" replace />} />
+        {/* The Examinations page manages every paper's lifecycle; a link to a
+            single paper still opens that paper's register. */}
+        <Route path="exams" element={<Exams />} />
         <Route path="exams/:examId/entry" element={<MarksEntry />} />
         <Route path="reports" element={<Reports />} />
         <Route path="report-cards" element={<ReportCards />} />

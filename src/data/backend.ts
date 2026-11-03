@@ -65,7 +65,12 @@ export async function loadSchoolDatabase(schoolId: string): Promise<Database> {
     if (!teacherIds.has(r.teacher_id)) continue
     assigned.set(r.teacher_id, [...(assigned.get(r.teacher_id) ?? []), r.subject_id])
   }
-  const teacherRows: Teacher[] = rows.teachers.map((r) => ({ _id:id(r), school_id:r.school_id, full_name:r.full_name, email:r.email, employee_id:r.employee_id, initials:r.initials, assigned_subject_ids:assigned.get(r.id) ?? [], permissions:permissions.get(r.id) ?? [], password_hash:null, password_salt:null, activated_at:null }))
+  const assignedClasses = new Map<string, string[]>()
+  for (const r of rows.teacher_classes) {
+    if (!teacherIds.has(r.teacher_id)) continue
+    assignedClasses.set(r.teacher_id, [...(assignedClasses.get(r.teacher_id) ?? []), r.class_id])
+  }
+  const teacherRows: Teacher[] = rows.teachers.map((r) => ({ _id:id(r), school_id:r.school_id, full_name:r.full_name, email:r.email, employee_id:r.employee_id, initials:r.initials, assigned_subject_ids:assigned.get(r.id) ?? [], assigned_class_ids:assignedClasses.get(r.id) ?? [], permissions:permissions.get(r.id) ?? [], password_hash:null, password_salt:null, activated_at:null }))
   // Tenant offerings shadow their corresponding global catalogue entries using
   // the same per-level syllabus code-derived local ids as the existing UI.
   const tenantCodes = new Set(rows.subjects.filter((row) => row.school_id === schoolId).map((row) => row.code))

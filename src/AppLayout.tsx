@@ -5,6 +5,7 @@ import {
   BookOpen,
   CalendarDays,
   ClipboardList,
+  FileCheck2,
   FileText,
   GraduationCap,
   LayoutDashboard,
@@ -45,6 +46,7 @@ const GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Assessment Engine',
     items: [
       { to: '/dashboard/terms', label: 'Terms', icon: ClipboardList },
+      { to: '/dashboard/exams', label: 'Examinations', icon: FileCheck2 },
       { to: '/dashboard/marks-entry', label: 'Marks Entry', icon: FileText },
       { to: '/dashboard/analysis', label: 'Analysis', icon: TrendingUp },
       { to: '/dashboard/reports', label: 'Broadsheets', icon: Table2 },

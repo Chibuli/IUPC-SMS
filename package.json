@@ -12,7 +12,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test:backend": "vitest run src/data/backend.test.ts",
-    "test:focused": "vitest run src/data/backend.test.ts src/data/load-marks.test.ts src/data/student-lifecycle.test.ts src/lib/offline-outcomes.test.ts src/lib/enrollment-certainty.test.ts src/lib/analytics.test.ts src/lib/production-config.test.ts src/lib/teacher-onboarding.test.ts supabase/functions/provision-staff/handler.test.ts",
+    "test:focused": "vitest run src/data/backend.test.ts src/data/load-marks.test.ts src/data/student-lifecycle.test.ts src/lib/offline-outcomes.test.ts src/lib/enrollment-certainty.test.ts src/lib/analytics.test.ts src/lib/production-config.test.ts src/lib/teacher-onboarding.test.ts src/lib/exam-lifecycle.test.ts src/lib/teacher-classes.test.ts supabase/functions/provision-staff/handler.test.ts",
     "preview": "vite preview",
     "verify:print": "node scripts/verify.mjs",
     "verify:e2e": "node scripts/e2e.mjs",

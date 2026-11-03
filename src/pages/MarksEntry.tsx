@@ -11,10 +11,8 @@ import { usePrintPage } from '../lib/print'
 import type { Database, ID, Student } from '../data/types'
 import { isOperationalStudent } from '../data/student-lifecycle'
 import { SubjectCombobox } from '../components/SubjectCombobox'
+import { EXAM_TYPES } from '../lib/exam-lifecycle'
 import './MarksEntry.css'
-
-/** The five papers this campus sets, in the order a term runs them. */
-const EXAM_TYPES = ['CAT 1', 'CAT 2', 'Midterm', 'Endterm', 'Pre-Mock'] as const
 
 type SortKey = 'adm' | 'name' | 'gender'
 type Flash = 'saved' | 'queued' | 'review' | 'error'
